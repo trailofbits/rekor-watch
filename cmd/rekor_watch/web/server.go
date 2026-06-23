@@ -82,6 +82,8 @@ const (
 	routeAPISubscriptionsByIDDisable = "/api/subscriptions/{id}/disable"
 
 	routeAPISubscriptionsByIDRegenerateSecret = "/api/subscriptions/{id}/regenerate-secret" //nolint:gosec // G101: HTTP route path, not a credential
+
+	routeWebhookDocs = "/docs/webhooks"
 )
 
 // UserFromContext extracts the authenticated user from the request context.
@@ -234,6 +236,7 @@ func (s *Server) newMux() (*http.ServeMux, error) {
 
 	// Public routes
 	mux.HandleFunc(routeLanding, s.handleLanding)
+	mux.HandleFunc("GET "+routeWebhookDocs, s.handleWebhookDocs)
 
 	// Public routes with IP rate limiting
 	mux.HandleFunc(routeLogin,
@@ -504,6 +507,11 @@ func (s *Server) handleLanding(w http.ResponseWriter, r *http.Request) {
 	}
 
 	serveStaticTemplate(w, "templates/landing.html")
+}
+
+// handleWebhookDocs serves the public webhook signature verification guide.
+func (s *Server) handleWebhookDocs(w http.ResponseWriter, _ *http.Request) {
+	serveStaticTemplate(w, "templates/webhooks_docs.html")
 }
 
 // handleLogin serves the login form (GET) or processes login (POST).

@@ -91,6 +91,7 @@ func sendNotifications(
 	httpClient *http.Client,
 	notificationLimiter *web.RateLimiter,
 	emailSender web.EmailSender,
+	deriver *notifications.WebhookSecretDeriver,
 ) error {
 	pending, err := dbStore.ListPendingMatches(ctx)
 	if err != nil {
@@ -187,7 +188,17 @@ func sendNotifications(
 					continue
 				}
 			}
-			sendErr = webhookSender.Send(ctx, sub.WebhookURL, payload)
+
+			// Sign with the subscription's current secret; a derive error fails
+			// the delivery (and triggers retry) rather than sending unsigned.
+			eventID := webhookEventID(subID, matchIDs[0], matchIDs[len(matchIDs)-1])
+			secret, err := deriver.Secret(subID, sub.WebhookSecretVersion)
+			if err != nil {
+				log.Printf("Failed to derive webhook secret for subscription %d: %v", subID, err)
+				sendErr = fmt.Errorf("derive webhook secret: %w", err)
+				break
+			}
+			sendErr = webhookSender.Send(ctx, sub.WebhookURL, payload, eventID, secret)
 		case store.NotificationTypeEmail:
 			user := matches[0].User
 			subject, body := notifications.RenderMatchEmail(payload)
@@ -221,6 +232,13 @@ func sendNotifications(
 	}
 
 	return nil
+}
+
+// webhookEventID builds the Standard Webhooks webhook-id for a batch:
+// "sub_<subID>-batch_<minMatchID>-<maxMatchID>". Stable per batch so retries
+// reuse the id (subscribers' idempotency key).
+func webhookEventID(subID, minMatchID, maxMatchID int64) string {
+	return fmt.Sprintf("sub_%d-batch_%d-%d", subID, minMatchID, maxMatchID)
 }
 
 // webhookHost extracts the host (including port when present) from a
