@@ -157,17 +157,22 @@ const (
 
 // Subscription links a user to a monitored value and a notification channel.
 type Subscription struct {
-	ID                  int64
-	UserID              int64
-	Name                string
-	MonitoredValue      identity.MonitoredValue
-	NotificationType    NotificationType
-	WebhookURL          string
-	ConsecutiveFailures int
-	LastFailureAt       *time.Time
-	DisabledAt          *time.Time
-	NextRetryAt         *time.Time
-	CreatedAt           time.Time
+	ID               int64
+	UserID           int64
+	Name             string
+	MonitoredValue   identity.MonitoredValue
+	NotificationType NotificationType
+	WebhookURL       string
+	// WebhookSecretVersion is the counter the per-subscription signing
+	// secret is derived from. It is internal bookkeeping (the secret is
+	// never stored) and carries no sensitive material, so it is not
+	// serialized in API responses.
+	WebhookSecretVersion int `json:"-"`
+	ConsecutiveFailures  int
+	LastFailureAt        *time.Time
+	DisabledAt           *time.Time
+	NextRetryAt          *time.Time
+	CreatedAt            time.Time
 }
 
 // SubscriptionStore defines the interface for storing and retrieving subscriptions.
@@ -185,6 +190,11 @@ type SubscriptionStore interface {
 	// DeleteSubscription deletes a subscription by ID, scoped to the given user.
 	// Returns ErrNotFound if the subscription does not exist or does not belong to the user.
 	DeleteSubscription(ctx context.Context, id, userID int64) error
+
+	// GetSubscription returns the subscription with the given ID owned by the
+	// given user. Returns ErrNotFound if it does not exist or belongs to
+	// another user.
+	GetSubscription(ctx context.Context, id, userID int64) (*Subscription, error)
 
 	// ListSubscriptions returns all subscriptions in the store.
 	ListSubscriptions(ctx context.Context) ([]*Subscription, error)
@@ -205,6 +215,13 @@ type SubscriptionStore interface {
 	// and stores the pre-computed nextRetryAt for backoff scheduling.
 	// Returns the new consecutive failure count.
 	RecordNotificationFailure(ctx context.Context, subscriptionID int64, lastFailureAt, nextRetryAt time.Time) (int, error)
+
+	// RegenerateWebhookSecret bumps the subscription's webhook signing-secret
+	// version counter, scoped to the owning user, and returns the new version.
+	// A new version yields a freshly derived secret and retires the old one
+	// (hard cutover). Returns ErrNotFound if the subscription does not exist or
+	// does not belong to the given user.
+	RegenerateWebhookSecret(ctx context.Context, id, userID int64) (newVersion int, err error)
 
 	// SetSubscriptionEnabled enables or disables a subscription.
 	// Backoff state (consecutive_failures, last_failure_at, next_retry_at) is
