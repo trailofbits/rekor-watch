@@ -32,6 +32,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/sigstore/rekor-monitor/cmd/rekor_watch/notifications"
 	"github.com/sigstore/rekor-monitor/pkg/auth"
 	"github.com/sigstore/rekor-monitor/pkg/fulcio/extensions"
 	"github.com/sigstore/rekor-monitor/pkg/identity"
@@ -79,6 +80,8 @@ const (
 	routeAPISubscriptionsByID        = "/api/subscriptions/{id}"
 	routeAPISubscriptionsByIDEnable  = "/api/subscriptions/{id}/enable"
 	routeAPISubscriptionsByIDDisable = "/api/subscriptions/{id}/disable"
+
+	routeAPISubscriptionsByIDRegenerateSecret = "/api/subscriptions/{id}/regenerate-secret"
 )
 
 // UserFromContext extracts the authenticated user from the request context.
@@ -97,6 +100,7 @@ type Server struct {
 	baseURL                 string
 	allowPrivateWebhooks    bool
 	maxSubscriptionsPerUser int
+	secretDeriver           *notifications.WebhookSecretDeriver
 	httpServer              *http.Server
 	dashTmpl                *template.Template
 	emailLinkTmpl           *template.Template
@@ -125,6 +129,10 @@ type ServerConfig struct {
 	// Enforced on POST /api/subscriptions; PUT/DELETE remain unaffected
 	// so users above the cap can still drain organically.
 	MaxSubscriptionsPerUser int
+
+	// SecretDeriver derives per-subscription webhook signing secrets on
+	// demand. Required to reveal a secret on create and to regenerate one.
+	SecretDeriver *notifications.WebhookSecretDeriver
 
 	// Rate limiters below. Nil means no limiting for that scope.
 
@@ -199,6 +207,7 @@ func NewServer(cfg ServerConfig) *Server {
 		baseURL:                 strings.TrimRight(cfg.BaseURL, "/"),
 		allowPrivateWebhooks:    cfg.AllowPrivateWebhooks,
 		maxSubscriptionsPerUser: cfg.MaxSubscriptionsPerUser,
+		secretDeriver:           cfg.SecretDeriver,
 		trustProxyHeaders:       cfg.TrustProxyHeaders,
 		dashTmpl:                tmpl,
 		emailLinkTmpl:           emailTmpl,
@@ -244,6 +253,7 @@ func (s *Server) newMux() (*http.ServeMux, error) {
 	mux.HandleFunc("DELETE "+routeAPISubscriptionsByID, s.requireAuthRateLimited(s.handleDeleteSubscription))
 	mux.HandleFunc("POST "+routeAPISubscriptionsByIDEnable, s.requireAuthRateLimited(s.handleEnableSubscription))
 	mux.HandleFunc("POST "+routeAPISubscriptionsByIDDisable, s.requireAuthRateLimited(s.handleDisableSubscription))
+	mux.HandleFunc("POST "+routeAPISubscriptionsByIDRegenerateSecret, s.requireAuthRateLimited(s.handleRegenerateSecret))
 
 	return mux, nil
 }
@@ -931,7 +941,21 @@ func (s *Server) handleCreateSubscription(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	data, err := json.Marshal(sub)
+	// Reveal-once: webhook subscriptions get their derived signing secret in
+	// the create response and nowhere else. Lost secrets are recovered by
+	// regenerating, never re-revealed.
+	resp := createSubscriptionResponse{Subscription: sub}
+	if sub.NotificationType == store.NotificationTypeWebhook {
+		secret, err := s.secretDeriver.Secret(sub.ID, sub.WebhookSecretVersion)
+		if err != nil {
+			log.Printf("Error deriving webhook secret for subscription %d: %v", sub.ID, err)
+			http.Error(w, "Failed to create subscription", http.StatusInternalServerError)
+			return
+		}
+		resp.Secret = secret
+	}
+
+	data, err := json.Marshal(resp)
 	if err != nil {
 		log.Printf("Error encoding subscription response: %v", err)
 		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
@@ -941,6 +965,70 @@ func (s *Server) handleCreateSubscription(w http.ResponseWriter, r *http.Request
 	w.WriteHeader(http.StatusCreated)
 	if _, err := w.Write(data); err != nil {
 		log.Printf("Error writing subscription response: %v", err)
+	}
+}
+
+// createSubscriptionResponse is the create/regenerate response carrying the
+// reveal-once plaintext secret. The secret is computed on the fly and never
+// stored; it is omitted for email subscriptions.
+type createSubscriptionResponse struct {
+	*store.Subscription
+	Secret string `json:"secret,omitempty"`
+}
+
+// handleRegenerateSecret bumps a webhook subscription's signing-secret version
+// (hard cutover: the old secret dies immediately) and returns the freshly
+// derived secret reveal-once.
+func (s *Server) handleRegenerateSecret(w http.ResponseWriter, r *http.Request) {
+	user := userFromRequest(w, r)
+	if user == nil {
+		return
+	}
+
+	id, err := subscriptionIDFromPath(r)
+	if err != nil {
+		http.Error(w, "Invalid subscription ID", http.StatusBadRequest)
+		return
+	}
+
+	// Only webhook subscriptions have a signing secret. Look the subscription
+	// up (owner-scoped) so we can reject email subs before mutating anything.
+	sub, err := s.store.GetSubscription(r.Context(), id, user.ID)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			http.Error(w, "Subscription not found", http.StatusNotFound)
+			return
+		}
+		log.Printf("Error loading subscription %d: %v", id, err)
+		http.Error(w, "Failed to regenerate secret", http.StatusInternalServerError)
+		return
+	}
+	if sub.NotificationType != store.NotificationTypeWebhook {
+		http.Error(w, "Only webhook subscriptions have a signing secret", http.StatusBadRequest)
+		return
+	}
+
+	newVersion, err := s.store.RegenerateWebhookSecret(r.Context(), id, user.ID)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			http.Error(w, "Subscription not found", http.StatusNotFound)
+			return
+		}
+		log.Printf("Error regenerating webhook secret for subscription %d: %v", id, err)
+		http.Error(w, "Failed to regenerate secret", http.StatusInternalServerError)
+		return
+	}
+
+	secret, err := s.secretDeriver.Secret(id, newVersion)
+	if err != nil {
+		log.Printf("Error deriving webhook secret for subscription %d: %v", id, err)
+		http.Error(w, "Failed to regenerate secret", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(map[string]string{"secret": secret}); err != nil {
+		log.Printf("Error encoding regenerate-secret response: %v", err)
 	}
 }
 
