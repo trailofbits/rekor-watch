@@ -17,15 +17,19 @@ package web
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/sigstore/rekor-monitor/cmd/rekor_watch/notifications"
 	"github.com/sigstore/rekor-monitor/pkg/auth"
 	"github.com/sigstore/rekor-monitor/pkg/identity"
 	"github.com/sigstore/rekor-monitor/pkg/store"
@@ -69,8 +73,26 @@ func setupTestServer(t *testing.T) (*Server, *sqlite.Store, *mockEmailSender) {
 		BaseURL:                 "http://localhost:8080",
 		AllowPrivateWebhooks:    true,
 		MaxSubscriptionsPerUser: testMaxSubscriptionsPerUser,
+		SecretDeriver:           testSecretDeriver(t),
 	})
 	return srv, s, mock
+}
+
+// testSecretDeriver builds a deriver from a fixed, non-production master key
+// written to a temp file, so webhook-secret reveal/regenerate paths work in
+// tests without external setup.
+func testSecretDeriver(t *testing.T) *notifications.WebhookSecretDeriver {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "webhook-master.key")
+	key := base64.StdEncoding.EncodeToString([]byte("test-master-key-0123456789abcdef")) // 32 bytes
+	if err := os.WriteFile(path, []byte(key+"\n"), 0o600); err != nil {
+		t.Fatalf("failed to write test key file: %v", err)
+	}
+	d, err := notifications.LoadWebhookSecretDeriver(path)
+	if err != nil {
+		t.Fatalf("failed to load test secret deriver: %v", err)
+	}
+	return d
 }
 
 // testMux returns the server's full route table for tests
@@ -1034,6 +1056,7 @@ func newCappedServer(t *testing.T, maxSubs int) (*Server, *sqlite.Store) {
 		BaseURL:                 "http://localhost:8080",
 		AllowPrivateWebhooks:    true,
 		MaxSubscriptionsPerUser: maxSubs,
+		SecretDeriver:           testSecretDeriver(t),
 	})
 	return srv, s
 }
@@ -1973,6 +1996,7 @@ func setupRateLimitedServer(t *testing.T) (*Server, *sqlite.Store, *mockEmailSen
 		SMTP:                 mock,
 		BaseURL:              "http://localhost:8080",
 		AllowPrivateWebhooks: true,
+		SecretDeriver:        testSecretDeriver(t),
 		IPLimiter:            NewRateLimiter(2, 1*time.Minute),
 		LoginEmailLimiter:    NewRateLimiter(1, 1*time.Minute),
 		PollIPLimiter:        NewRateLimiter(2, 1*time.Minute),
