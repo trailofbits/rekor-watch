@@ -458,10 +458,89 @@ async function submitSubscription() {
             const text = await response.text();
             throw new Error(text || `HTTP ${response.status}`);
         }
+        // A new webhook subscription returns its signing secret exactly once.
+        if (method === 'POST') {
+            const created = await response.json().catch(() => ({}));
+            if (created && created.secret) {
+                showRevealedSecret(created.secret);
+            }
+        }
         document.getElementById('add-subscription-form').style.display = 'none';
         loadSubscriptions();
     } catch (error) {
         errorEl.textContent = error.message;
+        errorEl.style.display = 'block';
+    }
+}
+
+// showRevealedSecret displays a webhook signing secret once, with a copy
+// control and a warning that it will not be shown again. The secret is set as
+// textContent (never innerHTML) so it cannot inject markup.
+function showRevealedSecret(secret) {
+    const box = document.getElementById('secret-reveal');
+    if (!box) {
+        return;
+    }
+    box.replaceChildren();
+
+    const heading = document.createElement('strong');
+    heading.textContent = 'Webhook signing secret';
+    box.appendChild(heading);
+
+    const warning = document.createElement('p');
+    warning.className = 'secret-warning';
+    warning.textContent = "Copy it now — it won't be shown again. Lost secrets can only be replaced by regenerating.";
+    box.appendChild(warning);
+
+    const field = document.createElement('input');
+    field.type = 'text';
+    field.readOnly = true;
+    field.className = 'secret-value';
+    field.value = secret;
+    box.appendChild(field);
+
+    const copyBtn = document.createElement('button');
+    copyBtn.type = 'button';
+    copyBtn.className = 'btn btn-primary';
+    copyBtn.textContent = 'Copy';
+    copyBtn.onclick = () => {
+        field.select();
+        if (navigator.clipboard) {
+            navigator.clipboard.writeText(secret).catch(() => {});
+        }
+    };
+    box.appendChild(copyBtn);
+
+    const dismissBtn = document.createElement('button');
+    dismissBtn.type = 'button';
+    dismissBtn.className = 'btn btn-cancel';
+    dismissBtn.textContent = 'Dismiss';
+    dismissBtn.onclick = () => {
+        box.replaceChildren();
+        box.style.display = 'none';
+    };
+    box.appendChild(dismissBtn);
+
+    box.style.display = 'block';
+}
+
+async function regenerateSecret(id) {
+    if (!confirm('Regenerate the signing secret? The current secret stops working immediately and the receiver must be updated with the new one.')) {
+        return;
+    }
+    try {
+        const response = await fetch(`/api/subscriptions/${id}/regenerate-secret`, {method: 'POST'});
+        if (!response.ok) {
+            const text = await response.text();
+            throw new Error(text || `HTTP ${response.status}`);
+        }
+        const data = await response.json();
+        if (data && data.secret) {
+            showRevealedSecret(data.secret);
+        }
+    } catch (error) {
+        const errorEl = document.getElementById('sub-error');
+        errorEl.textContent = `Failed to regenerate secret: ${error.message}`;
         errorEl.style.display = 'block';
     }
 }
@@ -601,6 +680,14 @@ function renderSubscriptions(container, subs) {
             disableBtn.textContent = 'Disable';
             disableBtn.onclick = () => disableSubscription(sub.ID);
             actions.appendChild(disableBtn);
+        }
+
+        if (notifyType === 'webhook') {
+            const regenBtn = document.createElement('button');
+            regenBtn.className = 'btn btn-regenerate';
+            regenBtn.textContent = 'Regenerate secret';
+            regenBtn.onclick = () => regenerateSecret(sub.ID);
+            actions.appendChild(regenBtn);
         }
 
         const editBtn = document.createElement('button');

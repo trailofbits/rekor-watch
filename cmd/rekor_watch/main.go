@@ -31,6 +31,7 @@ import (
 
 	"net/http"
 
+	"github.com/sigstore/rekor-monitor/cmd/rekor_watch/notifications"
 	"github.com/sigstore/rekor-monitor/cmd/rekor_watch/web"
 	"github.com/sigstore/rekor-monitor/pkg/email"
 	"github.com/sigstore/rekor-monitor/pkg/identity"
@@ -99,6 +100,13 @@ const (
 	envSMTPHELO             = "REKOR_WATCH_SMTP_HELO"
 	envSMTPAuthType         = "REKOR_WATCH_SMTP_AUTH_TYPE"
 	envAllowPrivateWebhooks = "REKOR_WATCH_ALLOW_PRIVATE_WEBHOOKS"
+
+	// envWebhookSecretKeyFile points at a 0600 file holding the base64 of a
+	// >= 32 byte master key used to derive per-subscription webhook signing
+	// secrets. Required: the watcher refuses to start without it so webhook
+	// deliveries are never sent unsigned. The key is delivered via file, not
+	// env, to keep it out of /proc/<pid>/environ.
+	envWebhookSecretKeyFile = "REKOR_WATCH_WEBHOOK_SECRET_KEY_FILE" //nolint:gosec // G101: env var name, not a credential
 
 	envMaxSubscriptionsPerUser   = "REKOR_WATCH_MAX_SUBSCRIPTIONS_PER_USER"
 	envMaxMatchesPerSubscription = "REKOR_WATCH_MAX_MATCHES_PER_SUBSCRIPTION"
@@ -170,6 +178,16 @@ func validateMaxMatchesPerSubscription(v int) error {
 	return nil
 }
 
+// loadWebhookSecretDeriver loads the webhook signing master key from the given
+// file path, failing closed. An empty path is a configuration error: the key
+// is mandatory so deliveries are never sent unsigned.
+func loadWebhookSecretDeriver(keyFilePath string) (*notifications.WebhookSecretDeriver, error) {
+	if keyFilePath == "" {
+		return nil, fmt.Errorf("%s is required (path to the webhook signing master key file)", envWebhookSecretKeyFile)
+	}
+	return notifications.LoadWebhookSecretDeriver(keyFilePath)
+}
+
 // envOrDefaultDuration returns the environment variable value as a time.Duration if set, otherwise the fallback.
 func envOrDefaultDuration(envKey string, fallback time.Duration) time.Duration {
 	if v := os.Getenv(envKey); v != "" {
@@ -217,12 +235,20 @@ func mainWithReturn() int {
 	smtpAuthType := flag.String("smtp-auth-type", envOrDefault(envSMTPAuthType, "PLAIN"), envUsage(envSMTPAuthType, "SMTP authentication type (PLAIN, XOAUTH2)"))
 	maxSubscriptionsPerUser := flag.Int("max-subscriptions-per-user", envOrDefaultInt(envMaxSubscriptionsPerUser, defaultMaxSubscriptionsPerUser), envUsage(envMaxSubscriptionsPerUser, "maximum subscriptions a single user may own (must be > 0)"))
 	maxMatchesPerSubscription := flag.Int("max-matches-per-subscription", envOrDefaultInt(envMaxMatchesPerSubscription, defaultMaxMatchesPerSubscription), envUsage(envMaxMatchesPerSubscription, "maximum matches retained per subscription; older matches are evicted FIFO when exceeded (must be > 0)"))
+	webhookSecretKeyFile := flag.String("webhook-secret-key-file", envOrDefault(envWebhookSecretKeyFile, ""), envUsage(envWebhookSecretKeyFile, "path to a file holding the base64 of a >= 32 byte master key for deriving webhook signing secrets (required)"))
 	flag.Parse()
 
 	if err := validateMaxSubscriptionsPerUser(*maxSubscriptionsPerUser); err != nil {
 		log.Fatalf("invalid configuration: %v", err)
 	}
 	if err := validateMaxMatchesPerSubscription(*maxMatchesPerSubscription); err != nil {
+		log.Fatalf("invalid configuration: %v", err)
+	}
+
+	// Fail closed: without a master key we cannot derive signing secrets, and
+	// we never want to send webhook deliveries unsigned.
+	secretDeriver, err := loadWebhookSecretDeriver(*webhookSecretKeyFile)
+	if err != nil {
 		log.Fatalf("invalid configuration: %v", err)
 	}
 
@@ -313,6 +339,7 @@ func mainWithReturn() int {
 			AllowPrivateWebhooks:    allowPrivateWebhooks,
 			TrustProxyHeaders:       envOrDefaultBool(envTrustProxyHeaders, false),
 			MaxSubscriptionsPerUser: *maxSubscriptionsPerUser,
+			SecretDeriver:           secretDeriver,
 		}
 
 		if envOrDefaultBool(envRateLimitEnabled, true) {
