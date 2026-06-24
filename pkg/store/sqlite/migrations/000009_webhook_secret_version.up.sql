@@ -13,12 +13,9 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 --
--- Add a webhook signing-secret version counter to subscriptions. The signing
--- secret itself is never stored: it is derived on demand from a server-side
--- master key, the subscription ID, and this version. Bumping the version
--- (a "regenerate") yields a fresh secret and instantly retires the old one.
--- Existing rows default to version 1 and derive immediately once a master key
--- is configured; no backfill is required.
+-- Add a webhook signing-secret version counter to subscriptions. The secret
+-- itself is never stored; it is derived on demand from a master key, the
+-- subscription ID, and this version. Existing rows default to 1; no backfill.
 
 ALTER TABLE subscriptions
     ADD COLUMN webhook_secret_version INTEGER NOT NULL DEFAULT 1;

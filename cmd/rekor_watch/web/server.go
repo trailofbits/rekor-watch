@@ -968,12 +968,17 @@ func (s *Server) handleCreateSubscription(w http.ResponseWriter, r *http.Request
 	}
 }
 
-// createSubscriptionResponse is the create/regenerate response carrying the
-// reveal-once plaintext secret. The secret is computed on the fly and never
-// stored; it is omitted for email subscriptions.
+// secretResponse carries a reveal-once webhook signing secret. The secret is
+// derived on the fly and never stored.
+type secretResponse struct {
+	Secret string `json:"secret,omitempty"`
+}
+
+// createSubscriptionResponse is the create response: the subscription plus, for
+// webhook subscriptions, the reveal-once signing secret (omitted for email).
 type createSubscriptionResponse struct {
 	*store.Subscription
-	Secret string `json:"secret,omitempty"`
+	secretResponse
 }
 
 // handleRegenerateSecret bumps a webhook subscription's signing-secret version
@@ -991,8 +996,10 @@ func (s *Server) handleRegenerateSecret(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Only webhook subscriptions have a signing secret. Look the subscription
-	// up (owner-scoped) so we can reject email subs before mutating anything.
+	// Two store calls, by design: GetSubscription establishes existence,
+	// ownership, and type so we can return 400 for an email sub (which has no
+	// signing secret) versus 404 for missing/not-owner, before mutating
+	// anything. RegenerateWebhookSecret below then does the only mutation.
 	sub, err := s.store.GetSubscription(r.Context(), id, user.ID)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
@@ -1027,7 +1034,7 @@ func (s *Server) handleRegenerateSecret(w http.ResponseWriter, r *http.Request) 
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(map[string]string{"secret": secret}); err != nil {
+	if err := json.NewEncoder(w).Encode(secretResponse{Secret: secret}); err != nil {
 		log.Printf("Error encoding regenerate-secret response: %v", err)
 	}
 }
