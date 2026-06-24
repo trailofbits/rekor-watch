@@ -81,7 +81,7 @@ const (
 	routeAPISubscriptionsByIDEnable  = "/api/subscriptions/{id}/enable"
 	routeAPISubscriptionsByIDDisable = "/api/subscriptions/{id}/disable"
 
-	routeAPISubscriptionsByIDRegenerateSecret = "/api/subscriptions/{id}/regenerate-secret"
+	routeAPISubscriptionsByIDRegenerateSecret = "/api/subscriptions/{id}/regenerate-secret" //nolint:gosec // G101: HTTP route path, not a credential
 )
 
 // UserFromContext extracts the authenticated user from the request context.
