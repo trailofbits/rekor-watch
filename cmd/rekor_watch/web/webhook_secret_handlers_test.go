@@ -93,7 +93,7 @@ func TestCreateWebhookSubscription_returnsDerivedSecretOnce(t *testing.T) {
 	// The revealed secret must be the version-1 derivation — the same one
 	// dispatch will sign with. (A stale in-memory version would silently
 	// reveal a secret that never matches delivered signatures.)
-	want, err := testSecretDeriver(t).Secret(resp.ID, 1)
+	want, err := testSecretDeriver(t).Secret(resp.ID, 1, "https://hooks.example.com/x")
 	if err != nil {
 		t.Fatalf("Secret() error: %v", err)
 	}
@@ -154,6 +154,85 @@ func TestCreateWebhookSubscription_distinctUsersSameURLDistinctSecrets(t *testin
 	}
 }
 
+// updateWebhookSub PUTs a webhook subscription and returns the response.
+func updateWebhookSub(t *testing.T, mux *http.ServeMux, session string, id int64, name, fingerprint, url string) *httptest.ResponseRecorder {
+	t.Helper()
+	target := fmt.Sprintf("/api/subscriptions/%d", id)
+	req := httptest.NewRequest(http.MethodPut, target, strings.NewReader(webhookBody(name, fingerprint, url)))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: session})
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	return w
+}
+
+func TestUpdateSubscription_urlChangeRevealsRotatedSecret(t *testing.T) {
+	srv, s, _ := setupTestServer(t)
+	createTestUserSession(t, s, "wh-update@example.com", "wh-update-session")
+	mux := testMux(t, srv)
+
+	createResp := createWebhookSub(t, mux, "wh-update-session", "upsub", "ABCD", "https://hooks.example.com/old")
+	var created struct {
+		ID     int64  `json:"ID"`
+		Secret string `json:"secret"`
+	}
+	if err := json.Unmarshal(createResp.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode create: %v", err)
+	}
+
+	w := updateWebhookSub(t, mux, "wh-update-session", created.ID, "upsub", "ABCD", "https://hooks.example.com/new")
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var updated createSecretResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &updated); err != nil {
+		t.Fatalf("decode update: %v", err)
+	}
+	if updated.Secret == "" {
+		t.Fatal("URL change did not reveal a rotated secret")
+	}
+	if updated.Secret == created.Secret {
+		t.Errorf("URL change returned the same secret as create %q; must differ", updated.Secret)
+	}
+
+	// The rotated secret must be the version-2 derivation for the NEW URL — the
+	// one dispatch will sign with after the change.
+	want, err := testSecretDeriver(t).Secret(created.ID, 2, "https://hooks.example.com/new")
+	if err != nil {
+		t.Fatalf("Secret() error: %v", err)
+	}
+	if updated.Secret != want {
+		t.Errorf("rotated secret = %q, want the version-2 new-URL secret %q", updated.Secret, want)
+	}
+}
+
+func TestUpdateSubscription_noURLChangeOmitsSecret(t *testing.T) {
+	srv, s, _ := setupTestServer(t)
+	createTestUserSession(t, s, "wh-noop@example.com", "wh-noop-session")
+	mux := testMux(t, srv)
+
+	createResp := createWebhookSub(t, mux, "wh-noop-session", "noopsub", "ABCD", "https://hooks.example.com/keep")
+	var created struct {
+		ID int64 `json:"ID"`
+	}
+	if err := json.Unmarshal(createResp.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode create: %v", err)
+	}
+
+	// Rename only, same URL: nothing rotates, so no secret is revealed.
+	w := updateWebhookSub(t, mux, "wh-noop-session", created.ID, "noopsub-renamed", "ABCD", "https://hooks.example.com/keep")
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var updated createSecretResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &updated); err != nil {
+		t.Fatalf("decode update: %v", err)
+	}
+	if updated.Secret != "" {
+		t.Errorf("non-URL update returned a secret %q, want none", updated.Secret)
+	}
+}
+
 func regenerate(t *testing.T, mux *http.ServeMux, session string, id int64) *httptest.ResponseRecorder {
 	t.Helper()
 	url := fmt.Sprintf("/api/subscriptions/%d/regenerate-secret", id)
@@ -196,7 +275,7 @@ func TestRegenerateSecret_returnsNewSecret(t *testing.T) {
 	// Regenerate must bump to exactly version 2 — the secret dispatch will sign
 	// with next. A wrong-version bump would still "differ" from create and slip
 	// past the check above.
-	want, err := testSecretDeriver(t).Secret(created.ID, 2)
+	want, err := testSecretDeriver(t).Secret(created.ID, 2, "https://hooks.example.com/r")
 	if err != nil {
 		t.Fatalf("Secret() error: %v", err)
 	}

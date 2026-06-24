@@ -946,7 +946,7 @@ func (s *Server) handleCreateSubscription(w http.ResponseWriter, r *http.Request
 	// regenerating, never re-revealed.
 	resp := createSubscriptionResponse{Subscription: sub}
 	if sub.NotificationType == store.NotificationTypeWebhook {
-		secret, err := s.secretDeriver.Secret(sub.ID, sub.WebhookSecretVersion)
+		secret, err := s.secretDeriver.Secret(sub.ID, sub.WebhookSecretVersion, sub.WebhookURL)
 		if err != nil {
 			log.Printf("Error deriving webhook secret for subscription %d: %v", sub.ID, err)
 			http.Error(w, "Failed to create subscription", http.StatusInternalServerError)
@@ -1026,7 +1026,7 @@ func (s *Server) handleRegenerateSecret(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	secret, err := s.secretDeriver.Secret(id, newVersion)
+	secret, err := s.secretDeriver.Secret(id, newVersion, sub.WebhookURL)
 	if err != nil {
 		log.Printf("Error deriving webhook secret for subscription %d: %v", id, err)
 		http.Error(w, "Failed to regenerate secret", http.StatusInternalServerError)
@@ -1057,6 +1057,19 @@ func (s *Server) handleUpdateSubscription(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	// Load the current row first so we can tell whether this update changes the
+	// webhook URL, which rotates the signing secret and must be revealed once.
+	existing, err := s.store.GetSubscription(r.Context(), id, user.ID)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			http.Error(w, "Subscription not found", http.StatusNotFound)
+			return
+		}
+		log.Printf("Error loading subscription %d: %v", id, err)
+		http.Error(w, "Failed to update subscription", http.StatusInternalServerError)
+		return
+	}
+
 	sub := &store.Subscription{
 		ID:               id,
 		UserID:           user.ID,
@@ -1079,7 +1092,20 @@ func (s *Server) handleUpdateSubscription(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	data, err := json.Marshal(sub)
+	// A webhook URL change rotated the secret (UpdateSubscription bumped the
+	// version atomically); reveal the freshly derived secret exactly once.
+	resp := createSubscriptionResponse{Subscription: sub}
+	if sub.NotificationType == store.NotificationTypeWebhook && sub.WebhookURL != existing.WebhookURL {
+		secret, err := s.secretDeriver.Secret(sub.ID, sub.WebhookSecretVersion, sub.WebhookURL)
+		if err != nil {
+			log.Printf("Error deriving webhook secret for subscription %d: %v", sub.ID, err)
+			http.Error(w, "Failed to update subscription", http.StatusInternalServerError)
+			return
+		}
+		resp.Secret = secret
+	}
+
+	data, err := json.Marshal(resp)
 	if err != nil {
 		log.Printf("Error encoding subscription response: %v", err)
 		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
