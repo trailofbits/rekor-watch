@@ -77,22 +77,30 @@ func notificationBackoffWithJitter(failures int) time.Duration {
 	return d
 }
 
-// sendNotifications queries for un-notified matches, groups them by
-// subscription, and dispatches each subscription's batch through its
-// channel (webhook or email). Delivery failures feed the shared
-// per-subscription backoff and auto-disable; delivered matches are marked
-// notified. httpClient (SSRF-safe) and emailSender are caller-provided and
-// non-nil at dispatch time.
-func sendNotifications(
-	ctx context.Context,
-	dbStore store.Store,
-	now time.Time,
-	userAgentString string,
-	httpClient *http.Client,
-	notificationLimiter *web.RateLimiter,
-	emailSender web.EmailSender,
-) error {
-	pending, err := dbStore.ListPendingMatches(ctx)
+// notifier delivers pending matches to their subscribers.
+type notifier struct {
+	store   store.Store
+	webhook *notifications.WebhookSender
+	email   web.EmailSender
+	limiter *web.RateLimiter
+}
+
+func newNotifier(dbStore store.Store, userAgent string, httpClient *http.Client, limiter *web.RateLimiter, emailSender web.EmailSender) *notifier {
+	return &notifier{
+		store:   dbStore,
+		webhook: notifications.NewWebhookSender(userAgent, httpClient),
+		email:   emailSender,
+		limiter: limiter,
+	}
+}
+
+// runOnce queries for un-notified matches, groups them by subscription, and
+// dispatches each subscription's batch through its channel (webhook or email).
+// Delivery failures feed the shared per-subscription backoff and auto-disable;
+// delivered matches are marked notified. now is the dispatch cycle's wall-clock
+// time, used for backoff comparisons and payload timestamps.
+func (n *notifier) runOnce(ctx context.Context, now time.Time) error {
+	pending, err := n.store.ListPendingMatches(ctx)
 	if err != nil {
 		return err
 	}
@@ -110,10 +118,6 @@ func sendNotifications(
 	for _, pm := range pending {
 		groups[pm.Subscription.ID] = append(groups[pm.Subscription.ID], pm)
 	}
-
-	// One webhook sender is reused across every delivery; the webhook URL
-	// is per-delivery data passed to Send.
-	webhookSender := notifications.NewWebhookSender(userAgentString, httpClient)
 
 	for subID, matches := range groups {
 		sub := matches[0].Subscription
@@ -177,9 +181,9 @@ func sendNotifications(
 		switch sub.NotificationType {
 		case store.NotificationTypeWebhook:
 			// Rate-limit per destination host. Consumed once per batch.
-			if notificationLimiter != nil {
+			if n.limiter != nil {
 				host := webhookHost(sub.WebhookURL)
-				if allowed, _ := notificationLimiter.Allow(host); !allowed {
+				if allowed, _ := n.limiter.Allow(host); !allowed {
 					log.Printf(
 						"Webhook rate limit hit for %s, skipping subscription %d (%d matches deferred)",
 						host, subID, len(batch),
@@ -187,11 +191,11 @@ func sendNotifications(
 					continue
 				}
 			}
-			sendErr = webhookSender.Send(ctx, sub.WebhookURL, payload)
+			sendErr = n.webhook.Send(ctx, sub.WebhookURL, payload)
 		case store.NotificationTypeEmail:
 			user := matches[0].User
 			subject, body := notifications.RenderMatchEmail(payload)
-			sendErr = emailSender.Send(ctx, user.Email, subject, body)
+			sendErr = n.email.Send(ctx, user.Email, subject, body)
 		default:
 			sendErr = fmt.Errorf("unknown notification_type %q", sub.NotificationType)
 		}
@@ -199,11 +203,11 @@ func sendNotifications(
 		if sendErr != nil {
 			log.Printf("Failed to send %s notification for subscription %d (%d matches): %v", sub.NotificationType, subID, len(batch), sendErr)
 			nextRetry := now.Add(notificationBackoffWithJitter(sub.ConsecutiveFailures + 1))
-			newCount, recErr := dbStore.RecordNotificationFailure(ctx, subID, now, nextRetry)
+			newCount, recErr := n.store.RecordNotificationFailure(ctx, subID, now, nextRetry)
 			if recErr != nil {
 				log.Printf("Failed to record notification failure for subscription %d: %v", subID, recErr)
 			} else if newCount >= notificationMaxConsecutiveFailures {
-				if disErr := dbStore.SetSubscriptionEnabled(ctx, subID, sub.UserID, false); disErr != nil {
+				if disErr := n.store.SetSubscriptionEnabled(ctx, subID, sub.UserID, false); disErr != nil {
 					log.Printf("Failed to disable subscription %d: %v", subID, disErr)
 				} else {
 					log.Printf("Subscription %d disabled after %d consecutive notification failures", subID, newCount)
@@ -212,10 +216,10 @@ func sendNotifications(
 			continue
 		}
 
-		if err := dbStore.MarkMatchesNotified(ctx, matchIDs); err != nil {
+		if err := n.store.MarkMatchesNotified(ctx, matchIDs); err != nil {
 			log.Printf("Failed to mark %d matches as notified for subscription %d: %v", len(matchIDs), subID, err)
 		}
-		if err := dbStore.RecordNotificationSuccess(ctx, subID); err != nil {
+		if err := n.store.RecordNotificationSuccess(ctx, subID); err != nil {
 			log.Printf("Failed to record notification success for subscription %d: %v", subID, err)
 		}
 	}

@@ -37,6 +37,12 @@ import (
 	"github.com/sigstore/rekor-monitor/pkg/store/sqlite"
 )
 
+// deliverAt runs the notifier once as if the current time were now, so tests
+// can drive retry/backoff windows deterministically.
+func deliverAt(ctx context.Context, n *notifier, now time.Time) error {
+	return n.runOnce(ctx, now)
+}
+
 func setupTestStore(t *testing.T) *sqlite.Store {
 	t.Helper()
 	ctx := context.Background()
@@ -105,8 +111,8 @@ func TestSendNotifications_Success(t *testing.T) {
 	insertSubAndMatch(t, s, srv.URL)
 
 	ctx := context.Background()
-	if err := sendNotifications(ctx, s, time.Now(), "test-user-agent", http.DefaultClient, nil, nil); err != nil {
-		t.Fatalf("sendNotifications() error: %v", err)
+	if err := deliverAt(ctx, newNotifier(s, "test-user-agent", http.DefaultClient, nil, nil), time.Now()); err != nil {
+		t.Fatalf("runOnce() error: %v", err)
 	}
 
 	var payload notifications.NotificationPayload
@@ -154,8 +160,8 @@ func TestSendNotifications_EnvelopeStamps(t *testing.T) {
 	insertSubAndMatch(t, s, srv.URL)
 
 	cycle := time.Now()
-	if err := sendNotifications(context.Background(), s, cycle, "test-ua", http.DefaultClient, nil, nil); err != nil {
-		t.Fatalf("sendNotifications() error: %v", err)
+	if err := deliverAt(context.Background(), newNotifier(s, "test-ua", http.DefaultClient, nil, nil), cycle); err != nil {
+		t.Fatalf("runOnce() error: %v", err)
 	}
 
 	var payload notifications.NotificationPayload
@@ -229,8 +235,8 @@ func TestSendNotifications_OneRequestPerSubscription(t *testing.T) {
 		}
 	}
 
-	if err := sendNotifications(ctx, s, time.Now(), "test-user-agent", http.DefaultClient, nil, nil); err != nil {
-		t.Fatalf("sendNotifications() error: %v", err)
+	if err := deliverAt(ctx, newNotifier(s, "test-user-agent", http.DefaultClient, nil, nil), time.Now()); err != nil {
+		t.Fatalf("runOnce() error: %v", err)
 	}
 
 	if callCount != 2 {
@@ -264,8 +270,8 @@ func TestSendNotifications_WebhookFailure_NotMarkedNotified(t *testing.T) {
 	insertSubAndMatch(t, s, srv.URL)
 
 	ctx := context.Background()
-	if err := sendNotifications(ctx, s, time.Now(), "test-user-agent", http.DefaultClient, nil, nil); err != nil {
-		t.Fatalf("sendNotifications() error: %v", err)
+	if err := deliverAt(ctx, newNotifier(s, "test-user-agent", http.DefaultClient, nil, nil), time.Now()); err != nil {
+		t.Fatalf("runOnce() error: %v", err)
 	}
 
 	pending, err := s.ListPendingMatches(ctx)
@@ -331,8 +337,8 @@ func TestSendNotifications_PartialFailure_DifferentURLs(t *testing.T) {
 		t.Fatalf("failed to save match2: %v", err)
 	}
 
-	if err := sendNotifications(ctx, s, time.Now(), "test-user-agent", http.DefaultClient, nil, nil); err != nil {
-		t.Fatalf("sendNotifications() error: %v", err)
+	if err := deliverAt(ctx, newNotifier(s, "test-user-agent", http.DefaultClient, nil, nil), time.Now()); err != nil {
+		t.Fatalf("runOnce() error: %v", err)
 	}
 
 	pending, err := s.ListPendingMatches(ctx)
@@ -358,8 +364,8 @@ func TestSendNotifications_SafeClientBlocksLocalAddress(t *testing.T) {
 
 	ctx := context.Background()
 	safeClient := safenet.NewSafeHTTPClient()
-	if err := sendNotifications(ctx, s, time.Now(), "test-user-agent", safeClient, nil, nil); err != nil {
-		t.Fatalf("sendNotifications() error: %v", err)
+	if err := deliverAt(ctx, newNotifier(s, "test-user-agent", safeClient, nil, nil), time.Now()); err != nil {
+		t.Fatalf("runOnce() error: %v", err)
 	}
 
 	// The safe client should have blocked the request to the local
@@ -432,8 +438,8 @@ func TestSendNotifications_RateLimitDefersBatch(t *testing.T) {
 		t.Fatal("failed to pre-fill limiter bucket")
 	}
 
-	if err := sendNotifications(ctx, s, time.Now(), "test-user-agent", http.DefaultClient, limiter, nil); err != nil {
-		t.Fatalf("sendNotifications() error: %v", err)
+	if err := deliverAt(ctx, newNotifier(s, "test-user-agent", http.DefaultClient, limiter, nil), time.Now()); err != nil {
+		t.Fatalf("runOnce() error: %v", err)
 	}
 
 	if callCount != 0 {
@@ -492,8 +498,8 @@ func TestSendNotifications_RateLimitedOnly_DoesNotResetFailures(t *testing.T) {
 		t.Fatal("failed to pre-fill limiter bucket")
 	}
 
-	if err := sendNotifications(ctx, s, time.Now(), "test-user-agent", http.DefaultClient, limiter, nil); err != nil {
-		t.Fatalf("sendNotifications() error: %v", err)
+	if err := deliverAt(ctx, newNotifier(s, "test-user-agent", http.DefaultClient, limiter, nil), time.Now()); err != nil {
+		t.Fatalf("runOnce() error: %v", err)
 	}
 
 	if callCount != 0 {
@@ -579,8 +585,8 @@ func TestSendNotifications_RateLimitIsPerHost(t *testing.T) {
 	// single allowed POST per host carries all 3 matches for that host.
 	limiter := web.NewRateLimiter(1, 1*time.Minute)
 
-	if err := sendNotifications(ctx, s, time.Now(), "test-user-agent", http.DefaultClient, limiter, nil); err != nil {
-		t.Fatalf("sendNotifications() error: %v", err)
+	if err := deliverAt(ctx, newNotifier(s, "test-user-agent", http.DefaultClient, limiter, nil), time.Now()); err != nil {
+		t.Fatalf("runOnce() error: %v", err)
 	}
 
 	if callCountA != 1 {
@@ -604,8 +610,8 @@ func TestSendNotifications_NoPending(t *testing.T) {
 	s := setupTestStore(t)
 	ctx := context.Background()
 
-	if err := sendNotifications(ctx, s, time.Now(), "test-user-agent", http.DefaultClient, nil, nil); err != nil {
-		t.Fatalf("sendNotifications() with no pending matches should not error: %v", err)
+	if err := deliverAt(ctx, newNotifier(s, "test-user-agent", http.DefaultClient, nil, nil), time.Now()); err != nil {
+		t.Fatalf("runOnce() with no pending matches should not error: %v", err)
 	}
 }
 
@@ -677,8 +683,8 @@ func TestSendNotifications_WebhookFailure_RecordsFailure(t *testing.T) {
 	insertSubAndMatch(t, s, srv.URL)
 
 	ctx := context.Background()
-	if err := sendNotifications(ctx, s, time.Now(), "test-user-agent", http.DefaultClient, nil, nil); err != nil {
-		t.Fatalf("sendNotifications() error: %v", err)
+	if err := deliverAt(ctx, newNotifier(s, "test-user-agent", http.DefaultClient, nil, nil), time.Now()); err != nil {
+		t.Fatalf("runOnce() error: %v", err)
 	}
 
 	// Verify failure was recorded
@@ -756,8 +762,8 @@ func TestSendNotifications_BackoffSkipsSubscription(t *testing.T) {
 			}
 
 			// Send notifications — should skip due to backoff (failure was just recorded)
-			if err := sendNotifications(ctx, s, time.Now(), "test-user-agent", http.DefaultClient, nil, mock); err != nil {
-				t.Fatalf("sendNotifications() error: %v", err)
+			if err := deliverAt(ctx, newNotifier(s, "test-user-agent", http.DefaultClient, nil, mock), time.Now()); err != nil {
+				t.Fatalf("runOnce() error: %v", err)
 			}
 
 			if dispatched := callCount + len(mock.sent); dispatched != 0 {
@@ -829,8 +835,8 @@ func TestSendNotifications_Success_ResetsFailures(t *testing.T) {
 				t.Fatalf("failed to save match: %v", err)
 			}
 
-			if err := sendNotifications(ctx, s, time.Now(), "test-user-agent", http.DefaultClient, nil, mock); err != nil {
-				t.Fatalf("sendNotifications() error: %v", err)
+			if err := deliverAt(ctx, newNotifier(s, "test-user-agent", http.DefaultClient, nil, mock), time.Now()); err != nil {
+				t.Fatalf("runOnce() error: %v", err)
 			}
 
 			// Email arm must dispatch to the subscription owner's address,
@@ -930,8 +936,8 @@ func TestNotificationFailureBackoff_E2E(t *testing.T) {
 	// ── Phase 1: First failure ──
 	addMatch()
 	webhookCalls = 0
-	if err := sendNotifications(ctx, s, now, "test-ua", http.DefaultClient, nil, nil); err != nil {
-		t.Fatalf("phase 1: sendNotifications() error: %v", err)
+	if err := deliverAt(ctx, newNotifier(s, "test-ua", http.DefaultClient, nil, nil), now); err != nil {
+		t.Fatalf("phase 1: runOnce() error: %v", err)
 	}
 	if webhookCalls != 1 {
 		t.Fatalf("phase 1: expected 1 webhook call, got %d", webhookCalls)
@@ -952,8 +958,8 @@ func TestNotificationFailureBackoff_E2E(t *testing.T) {
 
 	// ── Phase 2: Backoff prevents immediate retry ──
 	webhookCalls = 0
-	if err := sendNotifications(ctx, s, now, "test-ua", http.DefaultClient, nil, nil); err != nil {
-		t.Fatalf("phase 2: sendNotifications() error: %v", err)
+	if err := deliverAt(ctx, newNotifier(s, "test-ua", http.DefaultClient, nil, nil), now); err != nil {
+		t.Fatalf("phase 2: runOnce() error: %v", err)
 	}
 	if webhookCalls != 0 {
 		t.Errorf("phase 2: expected 0 calls (backed off), got %d", webhookCalls)
@@ -963,8 +969,8 @@ func TestNotificationFailureBackoff_E2E(t *testing.T) {
 	webhookOK = true
 	webhookCalls = 0
 	future := st.NextRetryAt.Add(time.Second)
-	if err := sendNotifications(ctx, s, future, "test-ua", http.DefaultClient, nil, nil); err != nil {
-		t.Fatalf("phase 3: sendNotifications() error: %v", err)
+	if err := deliverAt(ctx, newNotifier(s, "test-ua", http.DefaultClient, nil, nil), future); err != nil {
+		t.Fatalf("phase 3: runOnce() error: %v", err)
 	}
 	if webhookCalls != 1 {
 		t.Fatalf("phase 3: expected 1 call after backoff, got %d", webhookCalls)
@@ -987,8 +993,8 @@ func TestNotificationFailureBackoff_E2E(t *testing.T) {
 		addMatch()
 		addMatch()
 		webhookCalls = 0
-		if err := sendNotifications(ctx, s, now, "test-ua", http.DefaultClient, nil, nil); err != nil {
-			t.Fatalf("phase 4 iter %d: sendNotifications() error: %v", i, err)
+		if err := deliverAt(ctx, newNotifier(s, "test-ua", http.DefaultClient, nil, nil), now); err != nil {
+			t.Fatalf("phase 4 iter %d: runOnce() error: %v", i, err)
 		}
 		if webhookCalls != 1 {
 			t.Fatalf("phase 4 iter %d: expected 1 batched POST, got %d", i, webhookCalls)
@@ -1036,8 +1042,8 @@ func TestNotificationFailureBackoff_E2E(t *testing.T) {
 	webhookOK = true
 	webhookCalls = 0
 	future = st.NextRetryAt.Add(time.Second)
-	if err := sendNotifications(ctx, s, future, "test-ua", http.DefaultClient, nil, nil); err != nil {
-		t.Fatalf("phase 7: sendNotifications() error: %v", err)
+	if err := deliverAt(ctx, newNotifier(s, "test-ua", http.DefaultClient, nil, nil), future); err != nil {
+		t.Fatalf("phase 7: runOnce() error: %v", err)
 	}
 	// Should deliver all pending matches for this subscription
 	if webhookCalls == 0 {
@@ -1120,8 +1126,8 @@ func TestWebhookFailure_BatchedDeliveryIsolatesSubscriptions(t *testing.T) {
 		}
 	}
 
-	if err := sendNotifications(ctx, s, time.Now(), "test-ua", http.DefaultClient, nil, nil); err != nil {
-		t.Fatalf("sendNotifications() error: %v", err)
+	if err := deliverAt(ctx, newNotifier(s, "test-ua", http.DefaultClient, nil, nil), time.Now()); err != nil {
+		t.Fatalf("runOnce() error: %v", err)
 	}
 
 	// One POST per subscription per cycle: 1 for each.
@@ -1170,7 +1176,7 @@ func TestWebhookFailure_BatchedDeliveryIsolatesSubscriptions(t *testing.T) {
 }
 
 // faultyStore wraps a real store.Store and lets tests inject errors on
-// specific methods exercised by sendNotifications. Only the overridden
+// specific methods exercised by runOnce. Only the overridden
 // methods are intercepted; everything else delegates to the embedded
 // store via the embedded interface.
 type faultyStore struct {
@@ -1272,8 +1278,8 @@ func TestSendNotifications_LargeBacklogDrains(t *testing.T) {
 		if len(pending) == 0 {
 			break
 		}
-		if err := sendNotifications(ctx, s, time.Now(), "test-ua", http.DefaultClient, nil, nil); err != nil {
-			t.Fatalf("cycle %d sendNotifications() error: %v", cycle, err)
+		if err := deliverAt(ctx, newNotifier(s, "test-ua", http.DefaultClient, nil, nil), time.Now()); err != nil {
+			t.Fatalf("cycle %d runOnce() error: %v", cycle, err)
 		}
 	}
 
@@ -1352,7 +1358,7 @@ func TestSendNotifications_RetryAfterFailureCarriesFullBatch(t *testing.T) {
 
 	// Cycle 1: failure.
 	now := time.Now()
-	if err := sendNotifications(ctx, s, now, "test-ua", http.DefaultClient, nil, nil); err != nil {
+	if err := deliverAt(ctx, newNotifier(s, "test-ua", http.DefaultClient, nil, nil), now); err != nil {
 		t.Fatalf("cycle 1 error: %v", err)
 	}
 	subs, _ := s.ListSubscriptions(ctx)
@@ -1363,7 +1369,7 @@ func TestSendNotifications_RetryAfterFailureCarriesFullBatch(t *testing.T) {
 	// Cycle 2: server now OK; advance past backoff.
 	fail = false
 	future := subs[0].NextRetryAt.Add(time.Second)
-	if err := sendNotifications(ctx, s, future, "test-ua", http.DefaultClient, nil, nil); err != nil {
+	if err := deliverAt(ctx, newNotifier(s, "test-ua", http.DefaultClient, nil, nil), future); err != nil {
 		t.Fatalf("cycle 2 error: %v", err)
 	}
 
@@ -1436,7 +1442,7 @@ func TestSendNotifications_NextCycleSendsOnlyNewMatches(t *testing.T) {
 			t.Fatalf("save match: %v", err)
 		}
 	}
-	if err := sendNotifications(ctx, s, time.Now(), "test-ua", http.DefaultClient, nil, nil); err != nil {
+	if err := deliverAt(ctx, newNotifier(s, "test-ua", http.DefaultClient, nil, nil), time.Now()); err != nil {
 		t.Fatalf("cycle 1 error: %v", err)
 	}
 
@@ -1449,7 +1455,7 @@ func TestSendNotifications_NextCycleSendsOnlyNewMatches(t *testing.T) {
 			t.Fatalf("save match: %v", err)
 		}
 	}
-	if err := sendNotifications(ctx, s, time.Now(), "test-ua", http.DefaultClient, nil, nil); err != nil {
+	if err := deliverAt(ctx, newNotifier(s, "test-ua", http.DefaultClient, nil, nil), time.Now()); err != nil {
 		t.Fatalf("cycle 2 error: %v", err)
 	}
 
@@ -1509,8 +1515,8 @@ func TestSendNotifications_BatchFailure_AllStayPending(t *testing.T) {
 		}
 	}
 
-	if err := sendNotifications(ctx, s, time.Now(), "test-ua", http.DefaultClient, nil, nil); err != nil {
-		t.Fatalf("sendNotifications() error: %v", err)
+	if err := deliverAt(ctx, newNotifier(s, "test-ua", http.DefaultClient, nil, nil), time.Now()); err != nil {
+		t.Fatalf("runOnce() error: %v", err)
 	}
 
 	if calls != 1 {
@@ -1545,7 +1551,7 @@ func captureLogs(t *testing.T) *bytes.Buffer {
 }
 
 // TestSendNotifications_RecordFailureError verifies that when
-// RecordNotificationFailure itself errors, sendNotifications logs and
+// RecordNotificationFailure itself errors, runOnce logs and
 // continues without crashing — and that the auto-disable check is
 // skipped (the else-if would otherwise read a stale newCount of 0).
 func TestSendNotifications_RecordFailureError(t *testing.T) {
@@ -1560,8 +1566,8 @@ func TestSendNotifications_RecordFailureError(t *testing.T) {
 	logs := captureLogs(t)
 	fs := &faultyStore{Store: s, recordFailureErr: errors.New("boom: db down")}
 
-	if err := sendNotifications(context.Background(), fs, time.Now(), "test-ua", http.DefaultClient, nil, nil); err != nil {
-		t.Fatalf("sendNotifications() error: %v", err)
+	if err := deliverAt(context.Background(), newNotifier(fs, "test-ua", http.DefaultClient, nil, nil), time.Now()); err != nil {
+		t.Fatalf("runOnce() error: %v", err)
 	}
 
 	if fs.recordFailureCalls != 1 {
@@ -1576,7 +1582,7 @@ func TestSendNotifications_RecordFailureError(t *testing.T) {
 }
 
 // TestSendNotifications_AutoDisableError verifies that when the
-// auto-disable call fails, sendNotifications logs the error and
+// auto-disable call fails, runOnce logs the error and
 // continues. The subscription remains active (DisabledAt nil) AND is
 // still eligible for retry on the next cycle — a regression that
 // gated additional behavior on ConsecutiveFailures >= threshold would
@@ -1629,8 +1635,8 @@ func TestSendNotifications_AutoDisableError(t *testing.T) {
 	fs := &faultyStore{Store: s, setEnabledErr: errors.New("boom: cannot disable")}
 
 	now := time.Now()
-	if err := sendNotifications(ctx, fs, now, "test-ua", http.DefaultClient, nil, nil); err != nil {
-		t.Fatalf("first sendNotifications() error: %v", err)
+	if err := deliverAt(ctx, newNotifier(fs, "test-ua", http.DefaultClient, nil, nil), now); err != nil {
+		t.Fatalf("first runOnce() error: %v", err)
 	}
 
 	if fs.setEnabledCalls != 1 {
@@ -1656,8 +1662,8 @@ func TestSendNotifications_AutoDisableError(t *testing.T) {
 	webhookOK = true
 	callsBefore := calls
 	future := subs[0].NextRetryAt.Add(time.Second)
-	if err := sendNotifications(ctx, fs, future, "test-ua", http.DefaultClient, nil, nil); err != nil {
-		t.Fatalf("second sendNotifications() error: %v", err)
+	if err := deliverAt(ctx, newNotifier(fs, "test-ua", http.DefaultClient, nil, nil), future); err != nil {
+		t.Fatalf("second runOnce() error: %v", err)
 	}
 
 	if calls != callsBefore+1 {
@@ -1670,7 +1676,7 @@ func TestSendNotifications_AutoDisableError(t *testing.T) {
 }
 
 // TestSendNotifications_MarkNotifiedError verifies that when
-// MarkMatchesNotified errors, sendNotifications logs the error and still
+// MarkMatchesNotified errors, runOnce logs the error and still
 // records the cycle as a success (the webhook delivery succeeded — the
 // consumer received the batch). Pre-seeded failures + RecordNotificationSuccess
 // counter guard against a regression that gates the success-reset on a
@@ -1722,8 +1728,8 @@ func TestSendNotifications_MarkNotifiedError(t *testing.T) {
 	logs := captureLogs(t)
 	fs := &faultyStore{Store: s, markNotifiedErr: errors.New("boom: mark failed")}
 
-	if err := sendNotifications(ctx, fs, time.Now(), "test-ua", http.DefaultClient, nil, nil); err != nil {
-		t.Fatalf("sendNotifications() error: %v", err)
+	if err := deliverAt(ctx, newNotifier(fs, "test-ua", http.DefaultClient, nil, nil), time.Now()); err != nil {
+		t.Fatalf("runOnce() error: %v", err)
 	}
 
 	if calls != 1 {
@@ -1759,7 +1765,7 @@ func TestSendNotifications_MarkNotifiedError(t *testing.T) {
 	}
 }
 
-// mockNotifEmailSender records emails sent by sendNotifications.
+// mockNotifEmailSender records emails sent by runOnce.
 type mockNotifEmailSender struct {
 	sent []mockNotifEmail
 	err  error // if non-nil, Send returns this error
