@@ -93,7 +93,7 @@ func TestCreateWebhookSubscription_returnsDerivedSecretOnce(t *testing.T) {
 	// The revealed secret must be the version-1 derivation — the same one
 	// dispatch will sign with. (A stale in-memory version would silently
 	// reveal a secret that never matches delivered signatures.)
-	want, err := testSecretDeriver(t).Secret(resp.ID, 1, "https://hooks.example.com/x")
+	want, err := testSecretDeriver(t).Secret(resp.ID, 1)
 	if err != nil {
 		t.Fatalf("Secret() error: %v", err)
 	}
@@ -195,14 +195,14 @@ func TestUpdateSubscription_urlChangeRevealsRotatedSecret(t *testing.T) {
 		t.Errorf("URL change returned the same secret as create %q; must differ", updated.Secret)
 	}
 
-	// The rotated secret must be the version-2 derivation for the NEW URL — the
-	// one dispatch will sign with after the change.
-	want, err := testSecretDeriver(t).Secret(created.ID, 2, "https://hooks.example.com/new")
+	// The URL change bumped the version to 2, so the rotated secret must be the
+	// version-2 derivation — the one dispatch will sign with after the change.
+	want, err := testSecretDeriver(t).Secret(created.ID, 2)
 	if err != nil {
 		t.Fatalf("Secret() error: %v", err)
 	}
 	if updated.Secret != want {
-		t.Errorf("rotated secret = %q, want the version-2 new-URL secret %q", updated.Secret, want)
+		t.Errorf("rotated secret = %q, want the version-2 secret %q", updated.Secret, want)
 	}
 }
 
@@ -275,7 +275,7 @@ func TestRegenerateSecret_returnsNewSecret(t *testing.T) {
 	// Regenerate must bump to exactly version 2 — the secret dispatch will sign
 	// with next. A wrong-version bump would still "differ" from create and slip
 	// past the check above.
-	want, err := testSecretDeriver(t).Secret(created.ID, 2, "https://hooks.example.com/r")
+	want, err := testSecretDeriver(t).Secret(created.ID, 2)
 	if err != nil {
 		t.Fatalf("Secret() error: %v", err)
 	}

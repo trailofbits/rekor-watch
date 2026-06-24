@@ -67,12 +67,14 @@ func LoadWebhookSecretDeriver(keyFilePath string) (*WebhookSecretDeriver, error)
 }
 
 // Secret returns the Standard Webhooks secret "whsec_<base64std(24B)>" for the
-// given subscription ID, version, and webhook URL. It is deterministic: the
-// same inputs and master key always yield the same secret. Any change to the
-// version (a regenerate) or to the destination URL yields a fresh, unrelated
-// secret, binding each secret to the URL it was issued for.
-func (d *WebhookSecretDeriver) Secret(subID int64, version int, webhookURL string) (string, error) {
-	info := fmt.Sprintf("rekor-watch/webhook-secret/v1|sub=%d|ver=%d|url=%s", subID, version, webhookURL)
+// given subscription ID and version. It is deterministic: the same inputs and
+// master key always yield the same secret, and any change to the version
+// yields a fresh, unrelated secret. The version is the single rotation
+// counter: it is bumped on an explicit regenerate and whenever the webhook URL
+// changes, so a URL change rotates the secret without the URL being part of
+// the derivation.
+func (d *WebhookSecretDeriver) Secret(subID int64, version int) (string, error) {
+	info := fmt.Sprintf("rekor-watch/webhook-secret/v1|sub=%d|ver=%d", subID, version)
 	kb, err := hkdf.Key(sha256.New, d.masterKey, nil, info, derivedSecretBytes)
 	if err != nil {
 		return "", fmt.Errorf("failed to derive webhook secret: %w", err)
