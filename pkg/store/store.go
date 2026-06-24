@@ -163,9 +163,8 @@ type Subscription struct {
 	MonitoredValue   identity.MonitoredValue
 	NotificationType NotificationType
 	WebhookURL       string
-	// WebhookSecretVersion is the counter the per-subscription signing
-	// secret is derived from. It is internal bookkeeping (the secret is
-	// never stored) and carries no sensitive material, so it is not
+	// WebhookSecretVersion is the counter the signing secret is derived from
+	// (the secret itself is never stored). Internal bookkeeping, so it is not
 	// serialized in API responses.
 	WebhookSecretVersion int `json:"-"`
 	ConsecutiveFailures  int

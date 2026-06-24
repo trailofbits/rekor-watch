@@ -445,10 +445,9 @@ func saveSubscription(ctx context.Context, exec dbExecutor, sub *store.Subscript
 		return fmt.Errorf("failed to verify monitored value: %w", err)
 	}
 
-	// RETURNING reflects the server-assigned id and the webhook_secret_version
-	// DEFAULT back onto the in-memory struct, so a caller that derives the
-	// reveal-once secret right after create uses the same version dispatch
-	// will sign with.
+	// RETURNING reflects the server-assigned id and webhook_secret_version
+	// DEFAULT back onto the struct, so a caller deriving the reveal-once secret
+	// right after create uses the version dispatch will sign with.
 	query := `
 		INSERT INTO subscriptions (user_id, name, monitored_value, webhook_url, notification_type)
 		VALUES (?, ?, ?, ?, ?)
