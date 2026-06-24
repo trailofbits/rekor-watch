@@ -946,7 +946,7 @@ func (s *Server) handleCreateSubscription(w http.ResponseWriter, r *http.Request
 	// regenerating, never re-revealed.
 	resp := createSubscriptionResponse{Subscription: sub}
 	if sub.NotificationType == store.NotificationTypeWebhook {
-		secret, err := s.secretDeriver.Secret(sub.ID, sub.WebhookSecretVersion, sub.WebhookURL)
+		secret, err := s.secretDeriver.Secret(sub.ID, sub.WebhookSecretVersion)
 		if err != nil {
 			log.Printf("Error deriving webhook secret for subscription %d: %v", sub.ID, err)
 			http.Error(w, "Failed to create subscription", http.StatusInternalServerError)
@@ -1026,7 +1026,7 @@ func (s *Server) handleRegenerateSecret(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	secret, err := s.secretDeriver.Secret(id, newVersion, sub.WebhookURL)
+	secret, err := s.secretDeriver.Secret(id, newVersion)
 	if err != nil {
 		log.Printf("Error deriving webhook secret for subscription %d: %v", id, err)
 		http.Error(w, "Failed to regenerate secret", http.StatusInternalServerError)
@@ -1096,7 +1096,7 @@ func (s *Server) handleUpdateSubscription(w http.ResponseWriter, r *http.Request
 	// version atomically); reveal the freshly derived secret exactly once.
 	resp := createSubscriptionResponse{Subscription: sub}
 	if sub.NotificationType == store.NotificationTypeWebhook && sub.WebhookURL != existing.WebhookURL {
-		secret, err := s.secretDeriver.Secret(sub.ID, sub.WebhookSecretVersion, sub.WebhookURL)
+		secret, err := s.secretDeriver.Secret(sub.ID, sub.WebhookSecretVersion)
 		if err != nil {
 			log.Printf("Error deriving webhook secret for subscription %d: %v", sub.ID, err)
 			http.Error(w, "Failed to update subscription", http.StatusInternalServerError)
