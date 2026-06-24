@@ -15,8 +15,9 @@
 --
 -- Add a webhook signing-secret version counter to subscriptions. The secret
 -- itself is never stored; it is derived on demand from a master key, the
--- subscription ID, the webhook URL, and this version. Existing rows default to
--- 1; no backfill.
+-- subscription ID, and this version. The version is bumped on an explicit
+-- regenerate and whenever the webhook URL changes, so either rotates the
+-- secret. Existing rows default to 1; no backfill.
 
 ALTER TABLE subscriptions
     ADD COLUMN webhook_secret_version INTEGER NOT NULL DEFAULT 1;
