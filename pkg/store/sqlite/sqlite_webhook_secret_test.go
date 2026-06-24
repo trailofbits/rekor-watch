@@ -190,6 +190,56 @@ func TestRegenerateWebhookSecret_MissingSubscription(t *testing.T) {
 	}
 }
 
+// TestUpdateSubscription_BumpsVersionOnURLChange verifies that changing the
+// webhook URL rotates the secret (version bumps and is reflected back), while
+// an update that leaves the URL unchanged leaves the version untouched.
+func TestUpdateSubscription_BumpsVersionOnURLChange(t *testing.T) {
+	ctx := context.Background()
+	s, err := NewStore(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("failed to create store: %v", err)
+	}
+	defer s.Close()
+
+	subID, userID := createTestSubscription(ctx, t, s)
+	mv := identity.CertIdentityValue{
+		CertSubject: "test@example.com",
+		Issuers:     []string{"https://accounts.google.com"},
+	}
+
+	changed := &store.Subscription{
+		ID: subID, UserID: userID, Name: "renamed",
+		MonitoredValue: mv, NotificationType: store.NotificationTypeWebhook,
+		WebhookURL: "https://hooks.example.com/changed",
+	}
+	if err := s.UpdateSubscription(ctx, changed); err != nil {
+		t.Fatalf("UpdateSubscription() error: %v", err)
+	}
+	if changed.WebhookSecretVersion != 2 {
+		t.Errorf("after URL change, reflected WebhookSecretVersion = %d, want 2", changed.WebhookSecretVersion)
+	}
+	got, err := s.GetSubscription(ctx, subID, userID)
+	if err != nil {
+		t.Fatalf("GetSubscription() error: %v", err)
+	}
+	if got.WebhookSecretVersion != 2 {
+		t.Errorf("persisted WebhookSecretVersion after URL change = %d, want 2", got.WebhookSecretVersion)
+	}
+
+	// A second update that keeps the same URL must not bump the version.
+	sameURL := &store.Subscription{
+		ID: subID, UserID: userID, Name: "renamed-again",
+		MonitoredValue: mv, NotificationType: store.NotificationTypeWebhook,
+		WebhookURL: "https://hooks.example.com/changed",
+	}
+	if err := s.UpdateSubscription(ctx, sameURL); err != nil {
+		t.Fatalf("UpdateSubscription() error: %v", err)
+	}
+	if sameURL.WebhookSecretVersion != 2 {
+		t.Errorf("after non-URL change, WebhookSecretVersion = %d, want 2 (unchanged)", sameURL.WebhookSecretVersion)
+	}
+}
+
 // TestListPendingMatches_PopulatesWebhookSecretVersion ensures the dispatch
 // JOIN carries the version so the dispatcher can derive the current secret.
 func TestListPendingMatches_PopulatesWebhookSecretVersion(t *testing.T) {

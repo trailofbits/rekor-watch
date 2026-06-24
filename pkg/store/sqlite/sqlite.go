@@ -481,32 +481,37 @@ func updateSubscription(ctx context.Context, exec dbExecutor, sub *store.Subscri
 		return fmt.Errorf("failed to serialize monitored value: %w", err)
 	}
 
+	// Changing the webhook URL rotates the signing secret, so bump the version
+	// counter in the same statement: the rotation is then atomic with the URL
+	// change and dispatch never pairs the new URL with the old version. The
+	// (webhook_url IS NOT ?) term is 1 when the URL changed and 0 otherwise;
+	// SET expressions see the pre-update row values. RETURNING reflects the
+	// (possibly bumped) version back so the caller can reveal the new secret.
 	query := `
 		UPDATE subscriptions
-		SET name = ?, monitored_value = ?, webhook_url = ?, notification_type = ?
+		SET name = ?, monitored_value = ?, notification_type = ?,
+		    webhook_secret_version = webhook_secret_version + (webhook_url IS NOT ?),
+		    webhook_url = ?
 		WHERE id = ? AND user_id = ?
+		RETURNING webhook_secret_version
 	`
 
-	result, err := exec.ExecContext(ctx, query,
+	err = exec.QueryRowContext(ctx, query,
 		sub.Name,
 		monitoredValueJSON,
-		sub.WebhookURL,
 		sub.NotificationType,
+		sub.WebhookURL, // comparison: did the URL change?
+		sub.WebhookURL, // new value
 		sub.ID, sub.UserID,
-	)
+	).Scan(&sub.WebhookSecretVersion)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("subscription %d not owned by user %d: %w", sub.ID, sub.UserID, store.ErrNotFound)
+	}
 	if err != nil {
 		if isUniqueConstraintErr(err) {
 			return fmt.Errorf("subscription name %q already in use by user %d: %w", sub.Name, sub.UserID, store.ErrDuplicateName)
 		}
 		return fmt.Errorf("failed to update subscription: %w", err)
-	}
-
-	rows, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("failed to get rows affected: %w", err)
-	}
-	if rows == 0 {
-		return fmt.Errorf("subscription %d not owned by user %d: %w", sub.ID, sub.UserID, store.ErrNotFound)
 	}
 
 	return nil

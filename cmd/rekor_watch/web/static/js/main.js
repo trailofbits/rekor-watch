@@ -458,12 +458,12 @@ async function submitSubscription() {
             const text = await response.text();
             throw new Error(text || `HTTP ${response.status}`);
         }
-        // A new webhook subscription returns its signing secret exactly once.
-        if (method === 'POST') {
-            const created = await response.json().catch(() => ({}));
-            if (created && created.secret) {
-                showRevealedSecret(created.secret);
-            }
+        // Creating a webhook subscription, or editing one in a way that
+        // changes its URL, returns a freshly rotated signing secret exactly
+        // once. The field is absent otherwise.
+        const result = await response.json().catch(() => ({}));
+        if (result && result.secret) {
+            showRevealedSecret(result.secret);
         }
         document.getElementById('add-subscription-form').style.display = 'none';
         loadSubscriptions();
