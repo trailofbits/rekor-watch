@@ -192,6 +192,17 @@ func TestRegenerateSecret_returnsNewSecret(t *testing.T) {
 	if regen.Secret == created.Secret {
 		t.Errorf("regenerate returned the same secret as create %q; must differ (hard cutover)", regen.Secret)
 	}
+
+	// Regenerate must bump to exactly version 2 — the secret dispatch will sign
+	// with next. A wrong-version bump would still "differ" from create and slip
+	// past the check above.
+	want, err := testSecretDeriver(t).Secret(created.ID, 2)
+	if err != nil {
+		t.Fatalf("Secret() error: %v", err)
+	}
+	if regen.Secret != want {
+		t.Errorf("regenerated secret = %q, want the version-2 secret %q", regen.Secret, want)
+	}
 }
 
 func TestRegenerateSecret_rejectsEmailSubscription(t *testing.T) {
@@ -203,14 +214,14 @@ func TestRegenerateSecret_rejectsEmailSubscription(t *testing.T) {
 	emailSub := mustSaveEmailSub(t, s, user.ID, "emailsub")
 
 	w := regenerate(t, mux, "regen-email-session", emailSub)
-	if w.Code != http.StatusBadRequest && w.Code != http.StatusConflict {
-		t.Errorf("regenerate on email sub = %d, want 400 or 409: %s", w.Code, w.Body.String())
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("regenerate on email sub = %d, want 400: %s", w.Code, w.Body.String())
 	}
 }
 
 func TestRegenerateSecret_rejectsNonOwner(t *testing.T) {
 	srv, s, _ := setupTestServer(t)
-	owner := createTestUserSession(t, s, "regen-owner@example.com", "regen-owner-session")
+	createTestUserSession(t, s, "regen-owner@example.com", "regen-owner-session")
 	createTestUserSession(t, s, "regen-attacker@example.com", "regen-attacker-session")
 	mux := testMux(t, srv)
 
@@ -221,7 +232,6 @@ func TestRegenerateSecret_rejectsNonOwner(t *testing.T) {
 	if err := json.Unmarshal(createResp.Body.Bytes(), &created); err != nil {
 		t.Fatalf("decode create: %v", err)
 	}
-	_ = owner
 
 	w := regenerate(t, mux, "regen-attacker-session", created.ID)
 	if w.Code != http.StatusNotFound {
