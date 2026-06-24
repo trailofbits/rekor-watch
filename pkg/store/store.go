@@ -181,7 +181,9 @@ type SubscriptionStore interface {
 	SaveSubscription(ctx context.Context, sub *Subscription) error
 
 	// UpdateSubscription updates an existing subscription's name, monitored value,
-	// webhook URL, and notification type.
+	// webhook URL, and notification type. Changing the webhook URL bumps the
+	// signing-secret version (rotating the secret) atomically with the URL
+	// change; the new version is reflected back onto sub.WebhookSecretVersion.
 	// Returns ErrNotFound if the subscription does not exist or does not belong to the given user.
 	// Returns ErrDuplicateName if the user already has another subscription with the same name.
 	UpdateSubscription(ctx context.Context, sub *Subscription) error

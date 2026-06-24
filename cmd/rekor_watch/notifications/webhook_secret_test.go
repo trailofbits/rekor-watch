@@ -23,6 +23,10 @@ import (
 	"testing"
 )
 
+// testWebhookURL is a fixed destination used where the URL is held constant so
+// a test can isolate another dimension (sub ID, version, master key).
+const testWebhookURL = "https://hooks.example.com/x"
+
 // writeKeyFile writes a master key file containing base64std of the given raw
 // bytes and returns its path.
 func writeKeyFile(t *testing.T, raw []byte) string {
@@ -80,11 +84,11 @@ func newTestDeriver(t *testing.T) *WebhookSecretDeriver {
 
 func TestDeriver_Secret_deterministicForSameInputs(t *testing.T) {
 	d := newTestDeriver(t)
-	a, err := d.Secret(42, 1)
+	a, err := d.Secret(42, 1, testWebhookURL)
 	if err != nil {
 		t.Fatalf("Secret() error: %v", err)
 	}
-	b, err := d.Secret(42, 1)
+	b, err := d.Secret(42, 1, testWebhookURL)
 	if err != nil {
 		t.Fatalf("Secret() error: %v", err)
 	}
@@ -95,8 +99,8 @@ func TestDeriver_Secret_deterministicForSameInputs(t *testing.T) {
 
 func TestDeriver_Secret_differsAcrossSubIDs(t *testing.T) {
 	d := newTestDeriver(t)
-	a, _ := d.Secret(1, 1)
-	b, _ := d.Secret(2, 1)
+	a, _ := d.Secret(1, 1, testWebhookURL)
+	b, _ := d.Secret(2, 1, testWebhookURL)
 	if a == b {
 		t.Errorf("Secret() should differ across subscription IDs, both = %q", a)
 	}
@@ -104,10 +108,19 @@ func TestDeriver_Secret_differsAcrossSubIDs(t *testing.T) {
 
 func TestDeriver_Secret_differsAcrossVersions(t *testing.T) {
 	d := newTestDeriver(t)
-	a, _ := d.Secret(1, 1)
-	b, _ := d.Secret(1, 2)
+	a, _ := d.Secret(1, 1, testWebhookURL)
+	b, _ := d.Secret(1, 2, testWebhookURL)
 	if a == b {
 		t.Errorf("Secret() should differ across versions (regenerate), both = %q", a)
+	}
+}
+
+func TestDeriver_Secret_differsAcrossURLs(t *testing.T) {
+	d := newTestDeriver(t)
+	a, _ := d.Secret(1, 1, "https://hooks.example.com/a")
+	b, _ := d.Secret(1, 1, "https://hooks.example.com/b")
+	if a == b {
+		t.Errorf("Secret() should differ across webhook URLs, both = %q", a)
 	}
 }
 
@@ -117,8 +130,8 @@ func TestDeriver_Secret_differsAcrossMasterKeys(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadWebhookSecretDeriver() error: %v", err)
 	}
-	a, _ := d1.Secret(1, 1)
-	b, _ := d2.Secret(1, 1)
+	a, _ := d1.Secret(1, 1, testWebhookURL)
+	b, _ := d2.Secret(1, 1, testWebhookURL)
 	if a == b {
 		t.Errorf("Secret() should differ across master keys, both = %q", a)
 	}
@@ -126,7 +139,7 @@ func TestDeriver_Secret_differsAcrossMasterKeys(t *testing.T) {
 
 func TestDeriver_Secret_whsecPrefixAnd24Bytes(t *testing.T) {
 	d := newTestDeriver(t)
-	secret, err := d.Secret(7, 3)
+	secret, err := d.Secret(7, 3, testWebhookURL)
 	if err != nil {
 		t.Fatalf("Secret() error: %v", err)
 	}
