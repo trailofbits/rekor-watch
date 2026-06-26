@@ -190,6 +190,44 @@ func TestRegenerateWebhookSecret_MissingSubscription(t *testing.T) {
 	}
 }
 
+// TestRegenerateWebhookSecret_RejectsNonWebhook returns ErrNotWebhook for an
+// owned, existing email subscription and leaves its version counter untouched.
+func TestRegenerateWebhookSecret_RejectsNonWebhook(t *testing.T) {
+	ctx := context.Background()
+	s, err := NewStore(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("failed to create store: %v", err)
+	}
+	defer s.Close()
+
+	user := &store.User{Email: "regen-email@example.com"}
+	if err := s.SaveUser(ctx, user); err != nil {
+		t.Fatalf("SaveUser() error: %v", err)
+	}
+	sub := &store.Subscription{
+		UserID:           user.ID,
+		Name:             "emailsub",
+		MonitoredValue:   identity.SubjectValue{Subject: "regen-email@example.com"},
+		NotificationType: store.NotificationTypeEmail,
+	}
+	if err := s.SaveSubscription(ctx, sub); err != nil {
+		t.Fatalf("SaveSubscription() error: %v", err)
+	}
+
+	if _, err := s.RegenerateWebhookSecret(ctx, sub.ID, user.ID); !errors.Is(err, store.ErrNotWebhook) {
+		t.Errorf("RegenerateWebhookSecret() on email sub err = %v, want ErrNotWebhook", err)
+	}
+
+	// The non-webhook row's version counter must be untouched.
+	subs, err := s.ListSubscriptionsByUser(ctx, user.ID)
+	if err != nil {
+		t.Fatalf("ListSubscriptionsByUser() error: %v", err)
+	}
+	if subs[0].WebhookSecretVersion != 1 {
+		t.Errorf("WebhookSecretVersion after rejected regenerate = %d, want 1", subs[0].WebhookSecretVersion)
+	}
+}
+
 // TestUpdateSubscription_BumpsVersionOnURLChange verifies that changing the
 // webhook URL rotates the secret (version bumps and is reflected back), while
 // an update that leaves the URL unchanged leaves the version untouched.
@@ -212,8 +250,12 @@ func TestUpdateSubscription_BumpsVersionOnURLChange(t *testing.T) {
 		MonitoredValue: mv, NotificationType: store.NotificationTypeWebhook,
 		WebhookURL: "https://hooks.example.com/changed",
 	}
-	if err := s.UpdateSubscription(ctx, changed); err != nil {
+	rotated, err := s.UpdateSubscription(ctx, changed)
+	if err != nil {
 		t.Fatalf("UpdateSubscription() error: %v", err)
+	}
+	if !rotated {
+		t.Errorf("after URL change, secretRotated = false, want true")
 	}
 	if changed.WebhookSecretVersion != 2 {
 		t.Errorf("after URL change, reflected WebhookSecretVersion = %d, want 2", changed.WebhookSecretVersion)
@@ -232,8 +274,12 @@ func TestUpdateSubscription_BumpsVersionOnURLChange(t *testing.T) {
 		MonitoredValue: mv, NotificationType: store.NotificationTypeWebhook,
 		WebhookURL: "https://hooks.example.com/changed",
 	}
-	if err := s.UpdateSubscription(ctx, sameURL); err != nil {
+	rotated, err = s.UpdateSubscription(ctx, sameURL)
+	if err != nil {
 		t.Fatalf("UpdateSubscription() error: %v", err)
+	}
+	if rotated {
+		t.Errorf("after non-URL change, secretRotated = true, want false")
 	}
 	if sameURL.WebhookSecretVersion != 2 {
 		t.Errorf("after non-URL change, WebhookSecretVersion = %d, want 2 (unchanged)", sameURL.WebhookSecretVersion)
