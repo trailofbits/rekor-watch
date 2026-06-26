@@ -35,6 +35,11 @@ var ErrNotFound = errors.New("not found")
 // the owning user already has a subscription with the same name.
 var ErrDuplicateName = errors.New("subscription name already in use")
 
+// ErrNotWebhook is returned when an operation that only applies to webhook
+// subscriptions (such as regenerating the signing secret) targets a
+// subscription that exists and is owned by the user but is not a webhook.
+var ErrNotWebhook = errors.New("subscription is not a webhook subscription")
+
 // CheckpointStore defines the interface for storing and retrieving checkpoints.
 // Implementations can use SQLite, PostgreSQL, or any other storage backend.
 type CheckpointStore interface {
@@ -181,12 +186,15 @@ type SubscriptionStore interface {
 	SaveSubscription(ctx context.Context, sub *Subscription) error
 
 	// UpdateSubscription updates an existing subscription's name, monitored value,
-	// webhook URL, and notification type. Changing the webhook URL bumps the
-	// signing-secret version (rotating the secret) atomically with the URL
-	// change; the new version is reflected back onto sub.WebhookSecretVersion.
+	// webhook URL, and notification type. Changing the webhook URL of a webhook
+	// subscription bumps the signing-secret version (rotating the secret)
+	// atomically with the URL change; the new version is reflected back onto
+	// sub.WebhookSecretVersion. The returned secretRotated reports whether the
+	// secret was rotated, so the caller can reveal the freshly derived secret
+	// once without a separate read.
 	// Returns ErrNotFound if the subscription does not exist or does not belong to the given user.
 	// Returns ErrDuplicateName if the user already has another subscription with the same name.
-	UpdateSubscription(ctx context.Context, sub *Subscription) error
+	UpdateSubscription(ctx context.Context, sub *Subscription) (secretRotated bool, err error)
 
 	// DeleteSubscription deletes a subscription by ID, scoped to the given user.
 	// Returns ErrNotFound if the subscription does not exist or does not belong to the user.
@@ -221,7 +229,8 @@ type SubscriptionStore interface {
 	// version counter, scoped to the owning user, and returns the new version.
 	// A new version yields a freshly derived secret and retires the old one
 	// (hard cutover). Returns ErrNotFound if the subscription does not exist or
-	// does not belong to the given user.
+	// does not belong to the given user, and ErrNotWebhook if it exists and is
+	// owned by the user but is not a webhook subscription.
 	RegenerateWebhookSecret(ctx context.Context, id, userID int64) (newVersion int, err error)
 
 	// SetSubscriptionEnabled enables or disables a subscription.

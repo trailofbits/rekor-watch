@@ -915,7 +915,7 @@ func TestUpdateSubscription(t *testing.T) {
 
 	sub.MonitoredValue = identity.FingerprintValue{Fingerprint: "NEWFINGERPRINT"}
 	sub.WebhookURL = "https://hooks.example.com/updated"
-	if err := s.UpdateSubscription(ctx, sub); err != nil {
+	if _, err := s.UpdateSubscription(ctx, sub); err != nil {
 		t.Fatalf("failed to update subscription: %v", err)
 	}
 
@@ -975,7 +975,7 @@ func TestUpdateSubscription_NotOwned(t *testing.T) {
 
 	sub.UserID = userB.ID
 	sub.WebhookURL = "https://hooks.example.com/hijacked"
-	err = s.UpdateSubscription(ctx, sub)
+	_, err = s.UpdateSubscription(ctx, sub)
 	if err == nil {
 		t.Fatal("expected error updating subscription not owned by user, got nil")
 	}
@@ -1006,7 +1006,7 @@ func TestUpdateSubscription_NotFound(t *testing.T) {
 		WebhookURL:       "https://hooks.example.com/nope",
 		NotificationType: store.NotificationTypeWebhook,
 	}
-	err = s.UpdateSubscription(ctx, sub)
+	_, err = s.UpdateSubscription(ctx, sub)
 	if err == nil {
 		t.Fatal("expected error updating non-existent subscription, got nil")
 	}
@@ -1051,13 +1051,13 @@ func TestUpdateSubscription_DuplicateName(t *testing.T) {
 
 	// Renaming "second" onto "first"'s name must collide.
 	second.Name = "first"
-	if err := s.UpdateSubscription(ctx, second); !errors.Is(err, store.ErrDuplicateName) {
+	if _, err := s.UpdateSubscription(ctx, second); !errors.Is(err, store.ErrDuplicateName) {
 		t.Fatalf("expected ErrDuplicateName, got %v", err)
 	}
 
 	// Updating a subscription while keeping its own name must succeed.
 	first.WebhookURL = "https://hooks.example.com/1-updated"
-	if err := s.UpdateSubscription(ctx, first); err != nil {
+	if _, err := s.UpdateSubscription(ctx, first); err != nil {
 		t.Fatalf("update keeping own name should succeed, got %v", err)
 	}
 }
@@ -1815,7 +1815,7 @@ func TestListMatchesWithSubByUser(t *testing.T) {
 	// The name is live-resolved from the subscription, so a rename is
 	// reflected on existing matches without touching the matches table.
 	sub1.Name = "prod certs (renamed)"
-	if err := s.UpdateSubscription(ctx, sub1); err != nil {
+	if _, err := s.UpdateSubscription(ctx, sub1); err != nil {
 		t.Fatalf("failed to rename sub1: %v", err)
 	}
 	renamed, err := s.ListMatchesWithSubByUser(ctx, user1.ID)

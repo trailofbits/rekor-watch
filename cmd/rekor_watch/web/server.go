@@ -996,29 +996,18 @@ func (s *Server) handleRegenerateSecret(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Two store calls, by design: GetSubscription establishes existence,
-	// ownership, and type so we can return 400 for an email sub (which has no
-	// signing secret) versus 404 for missing/not-owner, before mutating
-	// anything. RegenerateWebhookSecret below then does the only mutation.
-	sub, err := s.store.GetSubscription(r.Context(), id, user.ID)
+	// One owner-scoped store call decides existence and type atomically:
+	// ErrNotFound when no such subscription belongs to the user (404), and
+	// ErrNotWebhook when it exists but is an email sub with no signing secret
+	// (400). No separate pre-read needed.
+	newVersion, err := s.store.RegenerateWebhookSecret(r.Context(), id, user.ID)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			http.Error(w, "Subscription not found", http.StatusNotFound)
 			return
 		}
-		log.Printf("Error loading subscription %d: %v", id, err)
-		http.Error(w, "Failed to regenerate secret", http.StatusInternalServerError)
-		return
-	}
-	if sub.NotificationType != store.NotificationTypeWebhook {
-		http.Error(w, "Only webhook subscriptions have a signing secret", http.StatusBadRequest)
-		return
-	}
-
-	newVersion, err := s.store.RegenerateWebhookSecret(r.Context(), id, user.ID)
-	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			http.Error(w, "Subscription not found", http.StatusNotFound)
+		if errors.Is(err, store.ErrNotWebhook) {
+			http.Error(w, "Only webhook subscriptions have a signing secret", http.StatusBadRequest)
 			return
 		}
 		log.Printf("Error regenerating webhook secret for subscription %d: %v", id, err)
@@ -1057,19 +1046,6 @@ func (s *Server) handleUpdateSubscription(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// Load the current row first so we can tell whether this update changes the
-	// webhook URL, which rotates the signing secret and must be revealed once.
-	existing, err := s.store.GetSubscription(r.Context(), id, user.ID)
-	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			http.Error(w, "Subscription not found", http.StatusNotFound)
-			return
-		}
-		log.Printf("Error loading subscription %d: %v", id, err)
-		http.Error(w, "Failed to update subscription", http.StatusInternalServerError)
-		return
-	}
-
 	sub := &store.Subscription{
 		ID:               id,
 		UserID:           user.ID,
@@ -1078,7 +1054,11 @@ func (s *Server) handleUpdateSubscription(w http.ResponseWriter, r *http.Request
 		NotificationType: req.NotificationType,
 		WebhookURL:       req.WebhookURL,
 	}
-	if err := s.store.UpdateSubscription(r.Context(), sub); err != nil {
+	// The store reports whether this update rotated the webhook signing secret
+	// (a webhook URL change), so we know whether to reveal a new secret without
+	// a separate pre-read.
+	secretRotated, err := s.store.UpdateSubscription(r.Context(), sub)
+	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			http.Error(w, "Subscription not found", http.StatusNotFound)
 			return
@@ -1092,10 +1072,10 @@ func (s *Server) handleUpdateSubscription(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// A webhook URL change rotated the secret (UpdateSubscription bumped the
-	// version atomically); reveal the freshly derived secret exactly once.
+	// The rotated secret (bumped atomically by UpdateSubscription) is revealed
+	// exactly once, mirroring create and regenerate.
 	resp := createSubscriptionResponse{Subscription: sub}
-	if sub.NotificationType == store.NotificationTypeWebhook && sub.WebhookURL != existing.WebhookURL {
+	if secretRotated {
 		secret, err := s.secretDeriver.Secret(sub.ID, sub.WebhookSecretVersion)
 		if err != nil {
 			log.Printf("Error deriving webhook secret for subscription %d: %v", sub.ID, err)

@@ -471,22 +471,41 @@ func saveSubscription(ctx context.Context, exec dbExecutor, sub *store.Subscript
 	return nil
 }
 
-func updateSubscription(ctx context.Context, exec dbExecutor, sub *store.Subscription) error {
+// updateSubscription updates the subscription and reports whether the webhook
+// signing secret was rotated (a webhook subscription whose URL changed). The
+// read of the prior URL and the update must observe a consistent snapshot, so
+// callers run this against a transaction (see Store.UpdateSubscription).
+func updateSubscription(ctx context.Context, exec dbExecutor, sub *store.Subscription) (bool, error) {
 	if err := identity.VerifyMonitoredValues([]identity.MonitoredValue{sub.MonitoredValue}); err != nil {
-		return fmt.Errorf("failed to verify monitored value: %w", err)
+		return false, fmt.Errorf("failed to verify monitored value: %w", err)
 	}
 
 	monitoredValueJSON, err := sub.MonitoredValue.MarshalJSON()
 	if err != nil {
-		return fmt.Errorf("failed to serialize monitored value: %w", err)
+		return false, fmt.Errorf("failed to serialize monitored value: %w", err)
 	}
 
-	// Changing the webhook URL rotates the signing secret, so bump the version
-	// counter in the same statement: the rotation is then atomic with the URL
-	// change and dispatch never pairs the new URL with the old version. The
-	// (webhook_url IS NOT ?) term is 1 when the URL changed and 0 otherwise;
-	// SET expressions see the pre-update row values. RETURNING reflects the
-	// (possibly bumped) version back so the caller can reveal the new secret.
+	// Read the prior URL up front: a webhook URL change rotates the signing
+	// secret, and the caller needs to know whether to reveal the new one. This
+	// also establishes existence/ownership, yielding ErrNotFound before the
+	// update when the row is missing.
+	var oldURL string
+	err = exec.QueryRowContext(ctx,
+		`SELECT webhook_url FROM subscriptions WHERE id = ? AND user_id = ?`,
+		sub.ID, sub.UserID,
+	).Scan(&oldURL)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, fmt.Errorf("subscription %d not owned by user %d: %w", sub.ID, sub.UserID, store.ErrNotFound)
+	}
+	if err != nil {
+		return false, fmt.Errorf("failed to load subscription for update: %w", err)
+	}
+
+	// Bump the version counter in the same statement as the URL change so the
+	// rotation is atomic and dispatch never pairs the new URL with the old
+	// version. The (webhook_url IS NOT ?) term is 1 when the URL changed and 0
+	// otherwise; SET expressions see the pre-update row values. RETURNING
+	// reflects the (possibly bumped) version back.
 	query := `
 		UPDATE subscriptions
 		SET name = ?, monitored_value = ?, notification_type = ?,
@@ -505,16 +524,17 @@ func updateSubscription(ctx context.Context, exec dbExecutor, sub *store.Subscri
 		sub.ID, sub.UserID,
 	).Scan(&sub.WebhookSecretVersion)
 	if errors.Is(err, sql.ErrNoRows) {
-		return fmt.Errorf("subscription %d not owned by user %d: %w", sub.ID, sub.UserID, store.ErrNotFound)
+		return false, fmt.Errorf("subscription %d not owned by user %d: %w", sub.ID, sub.UserID, store.ErrNotFound)
 	}
 	if err != nil {
 		if isUniqueConstraintErr(err) {
-			return fmt.Errorf("subscription name %q already in use by user %d: %w", sub.Name, sub.UserID, store.ErrDuplicateName)
+			return false, fmt.Errorf("subscription name %q already in use by user %d: %w", sub.Name, sub.UserID, store.ErrDuplicateName)
 		}
-		return fmt.Errorf("failed to update subscription: %w", err)
+		return false, fmt.Errorf("failed to update subscription: %w", err)
 	}
 
-	return nil
+	secretRotated := sub.NotificationType == store.NotificationTypeWebhook && sub.WebhookURL != oldURL
+	return secretRotated, nil
 }
 
 func deleteSubscription(ctx context.Context, exec dbExecutor, id, userID int64) error {
@@ -934,19 +954,32 @@ func setSubscriptionEnabled(ctx context.Context, exec dbExecutor, id, userID int
 }
 
 func regenerateWebhookSecret(ctx context.Context, exec dbExecutor, id, userID int64) (int, error) {
+	// Single owner-scoped statement that distinguishes "not found" from "not a
+	// webhook" without a separate read: the version is only bumped for webhook
+	// rows (the CASE leaves other types untouched), while RETURNING hands back
+	// the type so a non-webhook subscription can be rejected. No matching row
+	// at all yields sql.ErrNoRows -> ErrNotFound.
 	query := `
 		UPDATE subscriptions
-		SET webhook_secret_version = webhook_secret_version + 1
+		SET webhook_secret_version = CASE
+			WHEN notification_type = ? THEN webhook_secret_version + 1
+			ELSE webhook_secret_version
+		END
 		WHERE id = ? AND user_id = ?
-		RETURNING webhook_secret_version
+		RETURNING notification_type, webhook_secret_version
 	`
+	var notificationType string
 	var newVersion int
-	err := exec.QueryRowContext(ctx, query, id, userID).Scan(&newVersion)
+	err := exec.QueryRowContext(ctx, query, store.NotificationTypeWebhook, id, userID).
+		Scan(&notificationType, &newVersion)
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, fmt.Errorf("subscription %d not found for user %d: %w", id, userID, store.ErrNotFound)
 	}
 	if err != nil {
 		return 0, fmt.Errorf("failed to regenerate webhook secret: %w", err)
+	}
+	if store.NotificationType(notificationType) != store.NotificationTypeWebhook {
+		return 0, fmt.Errorf("subscription %d for user %d is %q, not a webhook: %w", id, userID, notificationType, store.ErrNotWebhook)
 	}
 	return newVersion, nil
 }
@@ -1010,9 +1043,25 @@ func (s *Store) SaveSubscription(ctx context.Context, sub *store.Subscription) e
 	return saveSubscription(ctx, s.db, sub)
 }
 
-// UpdateSubscription updates an existing subscription.
-func (s *Store) UpdateSubscription(ctx context.Context, sub *store.Subscription) error {
-	return updateSubscription(ctx, s.db, sub)
+// UpdateSubscription updates an existing subscription and reports whether the
+// webhook signing secret was rotated. The prior-URL read and the update run in
+// one transaction so rotation detection and the version bump see a consistent
+// snapshot.
+func (s *Store) UpdateSubscription(ctx context.Context, sub *store.Subscription) (bool, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	rotated, err := updateSubscription(ctx, tx, sub)
+	if err != nil {
+		return false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf("failed to commit transaction: %w", err)
+	}
+	return rotated, nil
 }
 
 // DeleteSubscription deletes a subscription by ID, scoped to the given user.
@@ -1176,8 +1225,9 @@ func (t *Tx) SaveSubscription(ctx context.Context, sub *store.Subscription) erro
 	return saveSubscription(ctx, t.tx, sub)
 }
 
-// UpdateSubscription updates an existing subscription within the transaction.
-func (t *Tx) UpdateSubscription(ctx context.Context, sub *store.Subscription) error {
+// UpdateSubscription updates an existing subscription within the transaction
+// and reports whether the webhook signing secret was rotated.
+func (t *Tx) UpdateSubscription(ctx context.Context, sub *store.Subscription) (bool, error) {
 	return updateSubscription(ctx, t.tx, sub)
 }
 
