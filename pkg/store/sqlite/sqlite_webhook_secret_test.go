@@ -18,6 +18,11 @@ package sqlite
 import (
 	"context"
 	"errors"
+	"fmt"
+	"path/filepath"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/sigstore/rekor-monitor/pkg/identity"
@@ -283,6 +288,63 @@ func TestUpdateSubscription_BumpsVersionOnURLChange(t *testing.T) {
 	}
 	if sameURL.WebhookSecretVersion != 2 {
 		t.Errorf("after non-URL change, WebhookSecretVersion = %d, want 2 (unchanged)", sameURL.WebhookSecretVersion)
+	}
+}
+
+// TestUpdateSubscription_ConcurrentURLChanges runs many updates to the same row
+// at once, each setting a distinct URL. Optimistic concurrency on the version
+// lets exactly one update win per version generation: a committed update bumps
+// the version once, and a loser is rejected with ErrConcurrentModification (or a
+// transient SQLITE_BUSY) rather than committing a stale or lost bump. So the
+// final version is exactly one plus the number that committed.
+func TestUpdateSubscription_ConcurrentURLChanges(t *testing.T) {
+	ctx := context.Background()
+	// A file-backed DB (not :memory:) so concurrent connections share state.
+	s, err := NewStore(ctx, filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatalf("failed to create store: %v", err)
+	}
+	defer s.Close()
+
+	subID, userID := createTestSubscription(ctx, t, s)
+	mv := identity.CertIdentityValue{
+		CertSubject: "test@example.com",
+		Issuers:     []string{"https://accounts.google.com"},
+	}
+
+	const n = 20
+	var wg sync.WaitGroup
+	var succeeded int64
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			sub := &store.Subscription{
+				ID: subID, UserID: userID, Name: fmt.Sprintf("name-%d", i),
+				MonitoredValue: mv, NotificationType: store.NotificationTypeWebhook,
+				WebhookURL: fmt.Sprintf("https://hooks.example.com/%d", i),
+			}
+			switch _, err := s.UpdateSubscription(ctx, sub); {
+			case err == nil:
+				atomic.AddInt64(&succeeded, 1)
+			case errors.Is(err, store.ErrConcurrentModification), strings.Contains(err.Error(), "locked"):
+				// Expected loser: version moved, or a transient write-lock busy.
+			default:
+				t.Errorf("unexpected update error: %v", err)
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	if succeeded == 0 {
+		t.Fatal("no concurrent update succeeded")
+	}
+	got, err := s.GetSubscription(ctx, subID, userID)
+	if err != nil {
+		t.Fatalf("GetSubscription() error: %v", err)
+	}
+	if want := 1 + int(succeeded); got.WebhookSecretVersion != want {
+		t.Errorf("WebhookSecretVersion = %d, want %d (%d/%d updates committed)", got.WebhookSecretVersion, want, succeeded, n)
 	}
 }
 
