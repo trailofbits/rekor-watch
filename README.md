@@ -388,6 +388,7 @@ Key configuration groups:
 | Core | `REKOR_WATCH_INTERVAL`, `REKOR_WATCH_BASE_URL`, `REKOR_WATCH_SERVER_URL` | Polling frequency, public URL, log server |
 | SMTP | `REKOR_WATCH_SMTP_HOST`, `_PORT`, `_FROM`, `_USERNAME`, `_PASSWORD`, `_USE_TLS` | Point to a real SMTP server for production |
 | Security | `REKOR_WATCH_ALLOW_PRIVATE_WEBHOOKS`, `REKOR_WATCH_TRUST_PROXY_HEADERS` | Disable private webhooks and enable proxy headers in production |
+| Webhooks | `REKOR_WATCH_WEBHOOK_SECRET_KEY_FILE` | **Required.** Path to a file holding the base64 of a >= 32 byte master key for webhook signing secrets — see [Signing secret](#signing-secret) |
 | Ports | `REKOR_WATCH_LISTEN`, `REKOR_WATCH_HOST_PORT`, `MAILPIT_LISTEN` | Bind address and port mapping |
 
 See `.env.example` for the full list of options with descriptions.
@@ -438,6 +439,28 @@ today) and read `timestamp` (RFC3339, UTC) as the delivery time. Under `data`,
 `subscription_name` is the subscription's human-readable name, `monitored_value`
 mirrors the subscription's matcher, and `entries` is a list with up to 100
 elements. Order within `entries` is unspecified.
+
+### Signing secret
+
+Each webhook subscription has its own signing secret — the
+[Standard Webhooks](https://www.standardwebhooks.com/) `whsec_…` value. Secrets
+are derived on demand from a single master key and never stored, so the
+dashboard reveals a subscription's secret **once**: when the webhook is created,
+when its URL changes, and when you click *Regenerate secret*. Copy it then.
+
+The master key is mandatory — the watcher refuses to start without it. Point
+`REKOR_WATCH_WEBHOOK_SECRET_KEY_FILE` at a file holding the standard base64
+encoding of **at least 32 random bytes**:
+
+```bash
+openssl rand -base64 32 > webhook_secret.key
+chmod 600 webhook_secret.key
+export REKOR_WATCH_WEBHOOK_SECRET_KEY_FILE="$PWD/webhook_secret.key"
+```
+
+Keep the file private and back it up: every subscription's secret is derived
+from it, so replacing the key invalidates all existing webhook secrets and each
+consumer must copy its new secret.
 
 ### Deduplication contract
 
