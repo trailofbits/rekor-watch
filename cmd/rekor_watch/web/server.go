@@ -996,10 +996,6 @@ func (s *Server) handleRegenerateSecret(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// One owner-scoped store call decides existence and type atomically:
-	// ErrNotFound when no such subscription belongs to the user (404), and
-	// ErrNotWebhook when it exists but is an email sub with no signing secret
-	// (400). No separate pre-read needed.
 	newVersion, err := s.store.RegenerateWebhookSecret(r.Context(), id, user.ID)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
@@ -1054,9 +1050,6 @@ func (s *Server) handleUpdateSubscription(w http.ResponseWriter, r *http.Request
 		NotificationType: req.NotificationType,
 		WebhookURL:       req.WebhookURL,
 	}
-	// The store reports whether this update rotated the webhook signing secret
-	// (a webhook URL change), so we know whether to reveal a new secret without
-	// a separate pre-read.
 	secretRotated, err := s.store.UpdateSubscription(r.Context(), sub)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
@@ -1067,13 +1060,16 @@ func (s *Server) handleUpdateSubscription(w http.ResponseWriter, r *http.Request
 			http.Error(w, fmt.Sprintf("You already have a subscription named %q", sub.Name), http.StatusConflict)
 			return
 		}
+		if errors.Is(err, store.ErrConcurrentModification) {
+			http.Error(w, "Subscription was modified concurrently; please retry", http.StatusConflict)
+			return
+		}
 		log.Printf("Error updating subscription: %v", err)
 		http.Error(w, "Failed to update subscription", http.StatusInternalServerError)
 		return
 	}
 
-	// The rotated secret (bumped atomically by UpdateSubscription) is revealed
-	// exactly once, mirroring create and regenerate.
+	// Reveal the rotated secret once, mirroring create and regenerate.
 	resp := createSubscriptionResponse{Subscription: sub}
 	if secretRotated {
 		secret, err := s.secretDeriver.Secret(sub.ID, sub.WebhookSecretVersion)
