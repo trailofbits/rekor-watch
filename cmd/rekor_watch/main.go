@@ -384,7 +384,7 @@ func mainWithReturn() int {
 		// TODO: Implement Rekor watch logic for rekor v1
 	case 2:
 		log.Println("Starting Rekor v2 main loop...")
-		return mainLoopV2(ctx, tufClient, finalUserAgent, *httpsChainPath, *interval, dbStore, searchOpts, allowPrivateWebhooks, *maxMatchesPerSubscription, smtpSender)
+		return mainLoopV2(ctx, tufClient, finalUserAgent, *httpsChainPath, *interval, dbStore, searchOpts, allowPrivateWebhooks, *maxMatchesPerSubscription, smtpSender, secretDeriver)
 	default:
 		log.Printf("Unsupported server version %v, only '1' and '2' are supported\n", rekorVersion)
 		return 1
@@ -692,7 +692,7 @@ func groupSubscriptionsByValue(
 	return m
 }
 
-func mainLoopV2(ctx context.Context, tufClient *tuf.Client, userAgentString string, httpsChainPath string, interval time.Duration, dbStore store.TransactionalStore, searchOpts []identity.SearchOption, allowPrivateWebhooks bool, maxMatchesPerSubscription int, emailSender web.EmailSender) int {
+func mainLoopV2(ctx context.Context, tufClient *tuf.Client, userAgentString string, httpsChainPath string, interval time.Duration, dbStore store.TransactionalStore, searchOpts []identity.SearchOption, allowPrivateWebhooks bool, maxMatchesPerSubscription int, emailSender web.EmailSender, deriver *notifications.WebhookSecretDeriver) int {
 	tracker, err := newShardTracker(ctx, tufClient, userAgentString, httpsChainPath)
 	if err != nil {
 		log.Printf("error getting Rekor shards: %v\n", err)
@@ -724,7 +724,7 @@ func mainLoopV2(ctx context.Context, tufClient *tuf.Client, userAgentString stri
 	notificationLimiter := web.NewRateLimiter(5, 1*time.Second)
 
 	notifyFn := func(ctx context.Context) error {
-		return sendNotifications(ctx, dbStore, time.Now(), userAgentString, webhookClient, notificationLimiter, emailSender)
+		return sendNotifications(ctx, dbStore, time.Now(), userAgentString, webhookClient, notificationLimiter, emailSender, deriver)
 	}
 
 	return monitorLoop(ctx, interval, iterationFnV2, notifyFn)

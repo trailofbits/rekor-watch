@@ -55,7 +55,7 @@ func TestWebhookSender_Send_Success(t *testing.T) {
 
 	sender := NewWebhookSender("", http.DefaultClient)
 
-	if err := sender.Send(context.Background(), srv.URL, payload); err != nil {
+	if err := sender.Send(context.Background(), srv.URL, payload, "", ""); err != nil {
 		t.Fatalf("Send() returned error: %v", err)
 	}
 
@@ -99,7 +99,7 @@ func TestWebhookSender_Send_4xx(t *testing.T) {
 		},
 	}
 
-	err := sender.Send(context.Background(), srv.URL, payload)
+	err := sender.Send(context.Background(), srv.URL, payload, "", "")
 	if err == nil {
 		t.Fatal("expected error for 400 response, got nil")
 	}
@@ -121,7 +121,7 @@ func TestWebhookSender_Send_5xx(t *testing.T) {
 		},
 	}
 
-	err := sender.Send(context.Background(), srv.URL, payload)
+	err := sender.Send(context.Background(), srv.URL, payload, "", "")
 	if err == nil {
 		t.Fatal("expected error for 500 response, got nil")
 	}

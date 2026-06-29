@@ -412,21 +412,21 @@ format is stable JSON:
 ```json
 {
   "type": "rekor.match.created",
-  "timestamp": "2026-06-22T11:30:00Z",
+  "timestamp": "2026-06-29T08:56:12Z",
   "data": {
-    "subscription_name": "Production signing certs",
-    "monitored_value": { "subject": "user@example.com" },
+    "subscription_name": "work",
+    "monitored_value": {
+      "certSubject": ".*@example\\.com",
+      "issuers": null,
+      "type": "certIdentity"
+    },
     "entries": [
       {
-        "origin": "rekor.sigstore.dev - 1193050959916656506",
-        "log_index": 12345,
-        "uuid": "...",
+        "origin": "log2025-alpha3.rekor.sigstage.dev",
+        "log_index": 4653816,
+        "uuid": "",
         "cert_subject": "user@example.com",
-        "issuer": "https://accounts.example.com",
-        "fingerprint": "...",
-        "subject": "...",
-        "oid_extension": "...",
-        "extension_value": "..."
+        "issuer": "https://accounts.example.com"
       }
     ]
   }
@@ -437,8 +437,12 @@ The payload follows the [Standard Webhooks](https://www.standardwebhooks.com/)
 envelope shape: switch on the top-level `type` (only `rekor.match.created`
 today) and read `timestamp` (RFC3339, UTC) as the delivery time. Under `data`,
 `subscription_name` is the subscription's human-readable name, `monitored_value`
-mirrors the subscription's matcher, and `entries` is a list with up to 100
-elements. Order within `entries` is unspecified.
+mirrors the subscription's matcher verbatim (its shape depends on the matcher
+`type`, e.g. `certIdentity`), and `entries` is a list with up to 100 elements.
+Order within `entries` is unspecified. Each entry always carries `origin`,
+`log_index`, and `uuid`; the remaining fields (`cert_subject`, `issuer`,
+`fingerprint`, `subject`, `oid_extension`, `extension_value`) are present only
+when populated for that match.
 
 ### Signing secret
 
