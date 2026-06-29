@@ -376,13 +376,9 @@ docker compose --profile watch up --build
 ```
 
 Compose bind-mounts `./webhook_secret.key` read-only into the container, so the
-file must exist before `up` or the service fails to start. The container runs as
-an unprivileged `nonroot` user whose UID differs from your host user, so the key
-file must be world-readable (`chmod 644`) for it to be read through the mount —
-a `600` file owned by your host user is **not** readable inside the container.
-For production, prefer matching the file's ownership to the container user over
-loosening its permissions. This starts the web UI at <http://localhost:8080> and
-the mailpit inbox at <http://localhost:8025>.
+file must exist before `up` (the `644` mode lets the `nonroot` container user
+read it — see [Signing secret](#signing-secret)). This starts the web UI at
+<http://localhost:8080> and the mailpit inbox at <http://localhost:8025>.
 
 ### Configuration
 

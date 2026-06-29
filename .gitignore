@@ -128,3 +128,6 @@ rekor-watch
 # cmd/rekor_watch source directory.
 /rekor_watch
 /rekor_watch.db
+
+# Local webhook signing-secret master key (never commit)
+webhook_secret.key
