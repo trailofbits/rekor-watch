@@ -47,11 +47,19 @@ services:
       # Defaults to 0 (SSRF protection enabled); set to 1 only for
       # local development when webhooks target private IPs
       - REKOR_WATCH_ALLOW_PRIVATE_WEBHOOKS=${REKOR_WATCH_ALLOW_PRIVATE_WEBHOOKS:-0}
+      # The webhook signing-secret master key is always read from this fixed
+      # path inside the container; the host file is bind-mounted there below.
+      - REKOR_WATCH_WEBHOOK_SECRET_KEY_FILE=/etc/rekor-watch/webhook_secret.key
     restart: always
     ports:
       - "${REKOR_WATCH_LISTEN:-127.0.0.1}:${REKOR_WATCH_HOST_PORT:-8080}:8080"
     volumes:
       - watch-data:/data
+      # Bind-mount the master-key file read-only into the container. The host
+      # path comes from REKOR_WATCH_WEBHOOK_SECRET_KEY_FILE in .env (or the
+      # shell); it defaults to ./webhook_secret.key next to this compose file.
+      # Generate it before the first `up` (see README → Signing secret).
+      - ${REKOR_WATCH_WEBHOOK_SECRET_KEY_FILE:-./webhook_secret.key}:/etc/rekor-watch/webhook_secret.key:ro,z
     depends_on:
       - mailpit
 

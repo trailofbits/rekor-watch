@@ -365,12 +365,19 @@ as a local email server.
 
 ### Quick start
 
+The webhook signing-secret master key is required, so generate it next to the
+compose file before the first start (see [Signing secret](#signing-secret) for
+details):
+
 ```bash
+openssl rand -base64 32 > webhook_secret.key
+chmod 600 webhook_secret.key
 docker compose --profile watch up --build
 ```
 
-This starts the web UI at <http://localhost:8080> and the mailpit inbox at
-<http://localhost:8025>.
+Compose bind-mounts `./webhook_secret.key` read-only into the container, so the
+file must exist before `up` or the service fails to start. This starts the web
+UI at <http://localhost:8080> and the mailpit inbox at <http://localhost:8025>.
 
 ### Configuration
 
@@ -388,7 +395,7 @@ Key configuration groups:
 | Core | `REKOR_WATCH_INTERVAL`, `REKOR_WATCH_BASE_URL`, `REKOR_WATCH_SERVER_URL` | Polling frequency, public URL, log server |
 | SMTP | `REKOR_WATCH_SMTP_HOST`, `_PORT`, `_FROM`, `_USERNAME`, `_PASSWORD`, `_USE_TLS` | Point to a real SMTP server for production |
 | Security | `REKOR_WATCH_ALLOW_PRIVATE_WEBHOOKS`, `REKOR_WATCH_TRUST_PROXY_HEADERS` | Disable private webhooks and enable proxy headers in production |
-| Webhooks | `REKOR_WATCH_WEBHOOK_SECRET_KEY_FILE` | **Required.** Path to a file holding the base64 of a >= 32 byte master key for webhook signing secrets — see [Signing secret](#signing-secret) |
+| Webhooks | `REKOR_WATCH_WEBHOOK_SECRET_KEY_FILE` | **Required.** Under Compose this is the *host* path to the master-key file, which is bind-mounted read-only into the container (default `./webhook_secret.key`) — see [Signing secret](#signing-secret) |
 | Ports | `REKOR_WATCH_LISTEN`, `REKOR_WATCH_HOST_PORT`, `MAILPIT_LISTEN` | Bind address and port mapping |
 
 See `.env.example` for the full list of options with descriptions.
@@ -457,6 +464,12 @@ openssl rand -base64 32 > webhook_secret.key
 chmod 600 webhook_secret.key
 export REKOR_WATCH_WEBHOOK_SECRET_KEY_FILE="$PWD/webhook_secret.key"
 ```
+
+Under Docker Compose you don't set this env var to a container path: point
+`REKOR_WATCH_WEBHOOK_SECRET_KEY_FILE` at the key file's *host* path (or leave it
+unset to use `./webhook_secret.key` next to the compose file). Compose
+bind-mounts that file read-only into the container and the service reads it from
+a fixed internal path.
 
 Keep the file private and back it up: every subscription's secret is derived
 from it, so replacing the key invalidates all existing webhook secrets and each
