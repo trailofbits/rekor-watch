@@ -371,13 +371,18 @@ details):
 
 ```bash
 openssl rand -base64 32 > webhook_secret.key
-chmod 600 webhook_secret.key
+chmod 644 webhook_secret.key
 docker compose --profile watch up --build
 ```
 
 Compose bind-mounts `./webhook_secret.key` read-only into the container, so the
-file must exist before `up` or the service fails to start. This starts the web
-UI at <http://localhost:8080> and the mailpit inbox at <http://localhost:8025>.
+file must exist before `up` or the service fails to start. The container runs as
+an unprivileged `nonroot` user whose UID differs from your host user, so the key
+file must be world-readable (`chmod 644`) for it to be read through the mount —
+a `600` file owned by your host user is **not** readable inside the container.
+For production, prefer matching the file's ownership to the container user over
+loosening its permissions. This starts the web UI at <http://localhost:8080> and
+the mailpit inbox at <http://localhost:8025>.
 
 ### Configuration
 
@@ -469,7 +474,10 @@ Under Docker Compose you don't set this env var to a container path: point
 `REKOR_WATCH_WEBHOOK_SECRET_KEY_FILE` at the key file's *host* path (or leave it
 unset to use `./webhook_secret.key` next to the compose file). Compose
 bind-mounts that file read-only into the container and the service reads it from
-a fixed internal path.
+a fixed internal path. The container runs as `nonroot`, so the host file must be
+readable by that user — use `chmod 644` (as the quick start does) or match the
+file's ownership to the container user; a `600` file owned by your host user is
+not readable through the mount.
 
 Keep the file private and back it up: every subscription's secret is derived
 from it, so replacing the key invalidates all existing webhook secrets and each
