@@ -470,10 +470,12 @@ Under Docker Compose you don't set this env var to a container path: point
 `REKOR_WATCH_WEBHOOK_SECRET_KEY_FILE` at the key file's *host* path (or leave it
 unset to use `./webhook_secret.key` next to the compose file). Compose
 bind-mounts that file read-only into the container and the service reads it from
-a fixed internal path. The container runs as `nonroot`, so the host file must be
-readable by that user — use `chmod 644` (as the quick start does) or match the
-file's ownership to the container user; a `600` file owned by your host user is
-not readable through the mount.
+a fixed internal path. The container runs as `nonroot` (UID/GID 65532), so the
+host file must be readable by that user — a `600` file owned by your host user
+is not. The quick start uses `chmod 644` for simplicity; to avoid making the key
+world-readable, instead run `chmod 640 webhook_secret.key && sudo chgrp 65532
+webhook_secret.key`, which grants read access to the container's group while
+keeping host-user ownership.
 
 Keep the file private and back it up: every subscription's secret is derived
 from it, so replacing the key invalidates all existing webhook secrets and each
