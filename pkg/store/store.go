@@ -196,11 +196,6 @@ type SubscriptionStore interface {
 	// Returns ErrNotFound if the subscription does not exist or does not belong to the user.
 	DeleteSubscription(ctx context.Context, id, userID int64) error
 
-	// GetSubscription returns the subscription with the given ID owned by the
-	// given user. Returns ErrNotFound if it does not exist or belongs to
-	// another user.
-	GetSubscription(ctx context.Context, id, userID int64) (*Subscription, error)
-
 	// ListSubscriptions returns all subscriptions in the store.
 	ListSubscriptions(ctx context.Context) ([]*Subscription, error)
 
