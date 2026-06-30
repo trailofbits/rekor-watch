@@ -474,8 +474,7 @@ func saveSubscription(ctx context.Context, exec dbExecutor, sub *store.Subscript
 // updateSubscription updates the subscription's name, monitored value,
 // notification type, and webhook URL. It never touches webhook_secret_version:
 // the signing secret rotates only on an explicit regenerate, so an update never
-// changes the secret. That decoupling makes this a single, race-free statement
-// — there is no read-modify-write to guard.
+// changes the secret.
 func updateSubscription(ctx context.Context, exec dbExecutor, sub *store.Subscription) error {
 	if err := identity.VerifyMonitoredValues([]identity.MonitoredValue{sub.MonitoredValue}); err != nil {
 		return fmt.Errorf("failed to verify monitored value: %w", err)
