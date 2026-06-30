@@ -59,7 +59,17 @@ services:
       # path comes from REKOR_WATCH_WEBHOOK_SECRET_KEY_FILE in .env (or the
       # shell); it defaults to ./webhook_secret.key next to this compose file.
       # Generate it before the first `up` (see README → Signing secret).
-      - ${REKOR_WATCH_WEBHOOK_SECRET_KEY_FILE:-./webhook_secret.key}:/etc/rekor-watch/webhook_secret.key:ro,z
+      # create_host_path:false makes a missing key file fail fast at `up` with a
+      # clear "bind source path does not exist" error, instead of Docker
+      # silently creating a directory there that the app then rejects with
+      # "is a directory".
+      - type: bind
+        source: ${REKOR_WATCH_WEBHOOK_SECRET_KEY_FILE:-./webhook_secret.key}
+        target: /etc/rekor-watch/webhook_secret.key
+        read_only: true
+        bind:
+          create_host_path: false
+          selinux: z
     depends_on:
       - mailpit
 
