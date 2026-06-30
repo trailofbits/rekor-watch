@@ -1050,8 +1050,7 @@ func (s *Server) handleUpdateSubscription(w http.ResponseWriter, r *http.Request
 		NotificationType: req.NotificationType,
 		WebhookURL:       req.WebhookURL,
 	}
-	secretRotated, err := s.store.UpdateSubscription(r.Context(), sub)
-	if err != nil {
+	if err := s.store.UpdateSubscription(r.Context(), sub); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			http.Error(w, "Subscription not found", http.StatusNotFound)
 			return
@@ -1060,26 +1059,14 @@ func (s *Server) handleUpdateSubscription(w http.ResponseWriter, r *http.Request
 			http.Error(w, fmt.Sprintf("You already have a subscription named %q", sub.Name), http.StatusConflict)
 			return
 		}
-		if errors.Is(err, store.ErrConcurrentModification) {
-			http.Error(w, "Subscription was modified concurrently; please retry", http.StatusConflict)
-			return
-		}
 		log.Printf("Error updating subscription: %v", err)
 		http.Error(w, "Failed to update subscription", http.StatusInternalServerError)
 		return
 	}
 
-	// Reveal the rotated secret once, mirroring create and regenerate.
+	// An update never rotates the signing secret (that happens only on an
+	// explicit regenerate), so no secret is revealed here.
 	resp := createSubscriptionResponse{Subscription: sub}
-	if secretRotated {
-		secret, err := s.secretDeriver.Secret(sub.ID, sub.WebhookSecretVersion)
-		if err != nil {
-			log.Printf("Error deriving webhook secret for subscription %d: %v", sub.ID, err)
-			http.Error(w, "Failed to update subscription", http.StatusInternalServerError)
-			return
-		}
-		resp.Secret = secret
-	}
 
 	data, err := json.Marshal(resp)
 	if err != nil {

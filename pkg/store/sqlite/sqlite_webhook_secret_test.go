@@ -22,7 +22,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 
 	"github.com/sigstore/rekor-monitor/pkg/identity"
@@ -233,10 +232,10 @@ func TestRegenerateWebhookSecret_RejectsNonWebhook(t *testing.T) {
 	}
 }
 
-// TestUpdateSubscription_BumpsVersionOnURLChange verifies that changing the
-// webhook URL rotates the secret (version bumps and is reflected back), while
-// an update that leaves the URL unchanged leaves the version untouched.
-func TestUpdateSubscription_BumpsVersionOnURLChange(t *testing.T) {
+// TestUpdateSubscription_NeverRotatesSecret verifies that updating a
+// subscription — including changing its webhook URL — never bumps the secret
+// version. The signing secret rotates only on an explicit regenerate.
+func TestUpdateSubscription_NeverRotatesSecret(t *testing.T) {
 	ctx := context.Background()
 	s, err := NewStore(ctx, ":memory:")
 	if err != nil {
@@ -250,54 +249,33 @@ func TestUpdateSubscription_BumpsVersionOnURLChange(t *testing.T) {
 		Issuers:     []string{"https://accounts.google.com"},
 	}
 
+	// Changing the URL must NOT rotate the secret.
 	changed := &store.Subscription{
 		ID: subID, UserID: userID, Name: "renamed",
 		MonitoredValue: mv, NotificationType: store.NotificationTypeWebhook,
 		WebhookURL: "https://hooks.example.com/changed",
 	}
-	rotated, err := s.UpdateSubscription(ctx, changed)
-	if err != nil {
+	if err := s.UpdateSubscription(ctx, changed); err != nil {
 		t.Fatalf("UpdateSubscription() error: %v", err)
-	}
-	if !rotated {
-		t.Errorf("after URL change, secretRotated = false, want true")
-	}
-	if changed.WebhookSecretVersion != 2 {
-		t.Errorf("after URL change, reflected WebhookSecretVersion = %d, want 2", changed.WebhookSecretVersion)
 	}
 	got, err := s.GetSubscription(ctx, subID, userID)
 	if err != nil {
 		t.Fatalf("GetSubscription() error: %v", err)
 	}
-	if got.WebhookSecretVersion != 2 {
-		t.Errorf("persisted WebhookSecretVersion after URL change = %d, want 2", got.WebhookSecretVersion)
+	if got.WebhookSecretVersion != 1 {
+		t.Errorf("after URL change, WebhookSecretVersion = %d, want 1 (unchanged)", got.WebhookSecretVersion)
 	}
-
-	// A second update that keeps the same URL must not bump the version.
-	sameURL := &store.Subscription{
-		ID: subID, UserID: userID, Name: "renamed-again",
-		MonitoredValue: mv, NotificationType: store.NotificationTypeWebhook,
-		WebhookURL: "https://hooks.example.com/changed",
-	}
-	rotated, err = s.UpdateSubscription(ctx, sameURL)
-	if err != nil {
-		t.Fatalf("UpdateSubscription() error: %v", err)
-	}
-	if rotated {
-		t.Errorf("after non-URL change, secretRotated = true, want false")
-	}
-	if sameURL.WebhookSecretVersion != 2 {
-		t.Errorf("after non-URL change, WebhookSecretVersion = %d, want 2 (unchanged)", sameURL.WebhookSecretVersion)
+	if got.WebhookURL != "https://hooks.example.com/changed" {
+		t.Errorf("URL not updated: got %q", got.WebhookURL)
 	}
 }
 
-// TestUpdateSubscription_ConcurrentURLChanges runs many updates to the same row
-// at once, each setting a distinct URL. Optimistic concurrency on the version
-// lets exactly one update win per version generation: a committed update bumps
-// the version once, and a loser is rejected with ErrConcurrentModification (or a
-// transient SQLITE_BUSY) rather than committing a stale or lost bump. So the
-// final version is exactly one plus the number that committed.
-func TestUpdateSubscription_ConcurrentURLChanges(t *testing.T) {
+// TestUpdateSubscription_ConcurrentUpdates runs many updates to the same row at
+// once. Because updates never touch the secret version, they are independent
+// last-writer-wins writes: each either commits or hits a transient write-lock
+// busy, the version stays put, and the row remains consistent (its final state
+// matches one of the writers).
+func TestUpdateSubscription_ConcurrentUpdates(t *testing.T) {
 	ctx := context.Background()
 	// A file-backed DB (not :memory:) so concurrent connections share state.
 	s, err := NewStore(ctx, filepath.Join(t.TempDir(), "test.db"))
@@ -314,7 +292,6 @@ func TestUpdateSubscription_ConcurrentURLChanges(t *testing.T) {
 
 	const n = 20
 	var wg sync.WaitGroup
-	var succeeded int64
 	for i := 0; i < n; i++ {
 		wg.Add(1)
 		go func(i int) {
@@ -324,11 +301,10 @@ func TestUpdateSubscription_ConcurrentURLChanges(t *testing.T) {
 				MonitoredValue: mv, NotificationType: store.NotificationTypeWebhook,
 				WebhookURL: fmt.Sprintf("https://hooks.example.com/%d", i),
 			}
-			switch _, err := s.UpdateSubscription(ctx, sub); {
+			switch err := s.UpdateSubscription(ctx, sub); {
 			case err == nil:
-				atomic.AddInt64(&succeeded, 1)
-			case errors.Is(err, store.ErrConcurrentModification), strings.Contains(err.Error(), "locked"):
-				// Expected loser: version moved, or a transient write-lock busy.
+			case strings.Contains(err.Error(), "locked"):
+				// A transient write-lock busy is acceptable under contention.
 			default:
 				t.Errorf("unexpected update error: %v", err)
 			}
@@ -336,15 +312,12 @@ func TestUpdateSubscription_ConcurrentURLChanges(t *testing.T) {
 	}
 	wg.Wait()
 
-	if succeeded == 0 {
-		t.Fatal("no concurrent update succeeded")
-	}
 	got, err := s.GetSubscription(ctx, subID, userID)
 	if err != nil {
 		t.Fatalf("GetSubscription() error: %v", err)
 	}
-	if want := 1 + int(succeeded); got.WebhookSecretVersion != want {
-		t.Errorf("WebhookSecretVersion = %d, want %d (%d/%d updates committed)", got.WebhookSecretVersion, want, succeeded, n)
+	if got.WebhookSecretVersion != 1 {
+		t.Errorf("WebhookSecretVersion = %d, want 1 (updates never rotate)", got.WebhookSecretVersion)
 	}
 }
 
