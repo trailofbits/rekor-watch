@@ -452,8 +452,10 @@ elements. Order within `entries` is unspecified.
 Each webhook subscription has its own signing secret — the
 [Standard Webhooks](https://www.standardwebhooks.com/) `whsec_…` value. Secrets
 are derived on demand from a single master key and never stored, so the
-dashboard reveals a subscription's secret **once**: when the webhook is created,
-when its URL changes, and when you click *Regenerate secret*. Copy it then.
+dashboard reveals a subscription's secret **once**: when the webhook is created
+and when you click *Regenerate secret*. Copy it then. Editing a subscription
+(including changing its URL) does not rotate the secret — use *Regenerate
+secret* for that.
 
 The master key is mandatory — the watcher refuses to start without it. Point
 `REKOR_WATCH_WEBHOOK_SECRET_KEY_FILE` at a file holding the standard base64

@@ -166,20 +166,20 @@ func updateWebhookSub(t *testing.T, mux *http.ServeMux, session string, id int64
 	return w
 }
 
-func TestUpdateSubscription_urlChangeRevealsRotatedSecret(t *testing.T) {
+func TestUpdateSubscription_urlChangeOmitsSecret(t *testing.T) {
 	srv, s, _ := setupTestServer(t)
 	createTestUserSession(t, s, "wh-update@example.com", "wh-update-session")
 	mux := testMux(t, srv)
 
 	createResp := createWebhookSub(t, mux, "wh-update-session", "upsub", "ABCD", "https://hooks.example.com/old")
 	var created struct {
-		ID     int64  `json:"ID"`
-		Secret string `json:"secret"`
+		ID int64 `json:"ID"`
 	}
 	if err := json.Unmarshal(createResp.Body.Bytes(), &created); err != nil {
 		t.Fatalf("decode create: %v", err)
 	}
 
+	// Changing the URL must NOT rotate the secret: an update never reveals one.
 	w := updateWebhookSub(t, mux, "wh-update-session", created.ID, "upsub", "ABCD", "https://hooks.example.com/new")
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
@@ -188,21 +188,8 @@ func TestUpdateSubscription_urlChangeRevealsRotatedSecret(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &updated); err != nil {
 		t.Fatalf("decode update: %v", err)
 	}
-	if updated.Secret == "" {
-		t.Fatal("URL change did not reveal a rotated secret")
-	}
-	if updated.Secret == created.Secret {
-		t.Errorf("URL change returned the same secret as create %q; must differ", updated.Secret)
-	}
-
-	// The URL change bumped the version to 2, so the rotated secret must be the
-	// version-2 derivation — the one dispatch will sign with after the change.
-	want, err := testSecretDeriver(t).Secret(created.ID, 2)
-	if err != nil {
-		t.Fatalf("Secret() error: %v", err)
-	}
-	if updated.Secret != want {
-		t.Errorf("rotated secret = %q, want the version-2 secret %q", updated.Secret, want)
+	if updated.Secret != "" {
+		t.Errorf("URL change returned a secret %q, want none (rotate only on explicit regenerate)", updated.Secret)
 	}
 }
 

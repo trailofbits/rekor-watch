@@ -39,11 +39,6 @@ var ErrDuplicateName = errors.New("subscription name already in use")
 // the signing secret) targets a subscription that is not a webhook.
 var ErrNotWebhook = errors.New("subscription is not a webhook subscription")
 
-// ErrConcurrentModification is returned when an optimistic-concurrency update
-// finds the subscription's secret version already advanced since it was read
-// (a racing update or secret regeneration), so the write was not applied.
-var ErrConcurrentModification = errors.New("subscription modified concurrently")
-
 // CheckpointStore defines the interface for storing and retrieving checkpoints.
 // Implementations can use SQLite, PostgreSQL, or any other storage backend.
 type CheckpointStore interface {
@@ -190,12 +185,12 @@ type SubscriptionStore interface {
 	SaveSubscription(ctx context.Context, sub *Subscription) error
 
 	// UpdateSubscription updates a subscription's name, monitored value, webhook
-	// URL, and notification type. Changing a webhook subscription's URL rotates
-	// the signing secret (bumping WebhookSecretVersion); secretRotated reports
-	// this so the caller can reveal the new secret. Returns ErrNotFound if it
-	// does not exist or belong to the user, ErrDuplicateName on a name clash,
-	// and ErrConcurrentModification if the secret version advanced under it.
-	UpdateSubscription(ctx context.Context, sub *Subscription) (secretRotated bool, err error)
+	// URL, and notification type. It never rotates the webhook signing secret —
+	// the secret changes only on an explicit regenerate — so changing the URL
+	// here leaves WebhookSecretVersion untouched. Returns ErrNotFound if the
+	// subscription does not exist or belong to the user, and ErrDuplicateName on
+	// a name clash.
+	UpdateSubscription(ctx context.Context, sub *Subscription) error
 
 	// DeleteSubscription deletes a subscription by ID, scoped to the given user.
 	// Returns ErrNotFound if the subscription does not exist or does not belong to the user.
