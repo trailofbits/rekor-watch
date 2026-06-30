@@ -85,36 +85,17 @@ func TestSaveSubscription_PopulatesWebhookSecretVersion(t *testing.T) {
 	}
 }
 
-// TestGetSubscription_OwnerScoped returns the owner's subscription and
-// ErrNotFound for a non-owner or a missing ID.
-func TestGetSubscription_OwnerScoped(t *testing.T) {
-	ctx := context.Background()
-	s, err := NewStore(ctx, ":memory:")
-	if err != nil {
-		t.Fatalf("failed to create store: %v", err)
+// readSubscriptionState reads a subscription's persisted webhook URL and secret
+// version directly, scoped to the owner. Helper for asserting writes.
+func readSubscriptionState(ctx context.Context, t *testing.T, s *Store, id, userID int64) (webhookURL string, secretVersion int) {
+	t.Helper()
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT webhook_url, webhook_secret_version FROM subscriptions WHERE id = ? AND user_id = ?`,
+		id, userID,
+	).Scan(&webhookURL, &secretVersion); err != nil {
+		t.Fatalf("read subscription %d: %v", id, err)
 	}
-	defer s.Close()
-
-	subID, ownerID := createTestSubscription(ctx, t, s)
-
-	got, err := s.GetSubscription(ctx, subID, ownerID)
-	if err != nil {
-		t.Fatalf("GetSubscription() error: %v", err)
-	}
-	if got.ID != subID || got.WebhookSecretVersion != 1 {
-		t.Errorf("GetSubscription() = id %d version %d, want id %d version 1", got.ID, got.WebhookSecretVersion, subID)
-	}
-
-	other := &store.User{Email: "other-get@example.com"}
-	if err := s.SaveUser(ctx, other); err != nil {
-		t.Fatalf("SaveUser() error: %v", err)
-	}
-	if _, err := s.GetSubscription(ctx, subID, other.ID); !errors.Is(err, store.ErrNotFound) {
-		t.Errorf("GetSubscription() non-owner err = %v, want ErrNotFound", err)
-	}
-	if _, err := s.GetSubscription(ctx, 99999, ownerID); !errors.Is(err, store.ErrNotFound) {
-		t.Errorf("GetSubscription() missing err = %v, want ErrNotFound", err)
-	}
+	return
 }
 
 // TestRegenerateWebhookSecret_BumpsVersion verifies the counter advances and
@@ -258,15 +239,12 @@ func TestUpdateSubscription_NeverRotatesSecret(t *testing.T) {
 	if err := s.UpdateSubscription(ctx, changed); err != nil {
 		t.Fatalf("UpdateSubscription() error: %v", err)
 	}
-	got, err := s.GetSubscription(ctx, subID, userID)
-	if err != nil {
-		t.Fatalf("GetSubscription() error: %v", err)
+	gotURL, gotVersion := readSubscriptionState(ctx, t, s, subID, userID)
+	if gotVersion != 1 {
+		t.Errorf("after URL change, WebhookSecretVersion = %d, want 1 (unchanged)", gotVersion)
 	}
-	if got.WebhookSecretVersion != 1 {
-		t.Errorf("after URL change, WebhookSecretVersion = %d, want 1 (unchanged)", got.WebhookSecretVersion)
-	}
-	if got.WebhookURL != "https://hooks.example.com/changed" {
-		t.Errorf("URL not updated: got %q", got.WebhookURL)
+	if gotURL != "https://hooks.example.com/changed" {
+		t.Errorf("URL not updated: got %q", gotURL)
 	}
 }
 
@@ -312,12 +290,8 @@ func TestUpdateSubscription_ConcurrentUpdates(t *testing.T) {
 	}
 	wg.Wait()
 
-	got, err := s.GetSubscription(ctx, subID, userID)
-	if err != nil {
-		t.Fatalf("GetSubscription() error: %v", err)
-	}
-	if got.WebhookSecretVersion != 1 {
-		t.Errorf("WebhookSecretVersion = %d, want 1 (updates never rotate)", got.WebhookSecretVersion)
+	if _, gotVersion := readSubscriptionState(ctx, t, s, subID, userID); gotVersion != 1 {
+		t.Errorf("WebhookSecretVersion = %d, want 1 (updates never rotate)", gotVersion)
 	}
 }
 

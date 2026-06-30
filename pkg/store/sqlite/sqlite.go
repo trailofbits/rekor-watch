@@ -665,31 +665,6 @@ func listSubscriptionsByUser(ctx context.Context, exec dbExecutor, userID int64)
 	return scanSubscriptionRows(rows)
 }
 
-func getSubscription(ctx context.Context, exec dbExecutor, id, userID int64) (*store.Subscription, error) {
-	query := `
-		SELECT id, user_id, name, monitored_value, webhook_url, notification_type,
-		       webhook_secret_version,
-		       consecutive_failures, last_failure_at, disabled_at, next_retry_at, created_at
-		FROM subscriptions
-		WHERE id = ? AND user_id = ?
-	`
-
-	rows, err := exec.QueryContext(ctx, query, id, userID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get subscription: %w", err)
-	}
-	defer rows.Close()
-
-	subs, err := scanSubscriptionRows(rows)
-	if err != nil {
-		return nil, err
-	}
-	if len(subs) == 0 {
-		return nil, fmt.Errorf("subscription %d not found for user %d: %w", id, userID, store.ErrNotFound)
-	}
-	return subs[0], nil
-}
-
 func countSubscriptionsByUser(ctx context.Context, exec dbExecutor, userID int64) (int, error) {
 	query := `SELECT COUNT(*) FROM subscriptions WHERE user_id = ?`
 
@@ -1022,11 +997,6 @@ func (s *Store) DeleteSubscription(ctx context.Context, id, userID int64) error 
 	return deleteSubscription(ctx, s.db, id, userID)
 }
 
-// GetSubscription returns the user's subscription with the given ID.
-func (s *Store) GetSubscription(ctx context.Context, id, userID int64) (*store.Subscription, error) {
-	return getSubscription(ctx, s.db, id, userID)
-}
-
 // ListSubscriptions returns subscriptions in the store.
 func (s *Store) ListSubscriptions(ctx context.Context) ([]*store.Subscription, error) {
 	return listSubscriptions(ctx, s.db)
@@ -1187,11 +1157,6 @@ func (t *Tx) UpdateSubscription(ctx context.Context, sub *store.Subscription) er
 // DeleteSubscription deletes a subscription within the transaction.
 func (t *Tx) DeleteSubscription(ctx context.Context, id, userID int64) error {
 	return deleteSubscription(ctx, t.tx, id, userID)
-}
-
-// GetSubscription returns the user's subscription with the given ID within the transaction.
-func (t *Tx) GetSubscription(ctx context.Context, id, userID int64) (*store.Subscription, error) {
-	return getSubscription(ctx, t.tx, id, userID)
 }
 
 // ListSubscriptions returns subscriptions within the transaction.
