@@ -370,7 +370,7 @@ func mainWithReturn() int {
 	}
 
 	allRekorServices := signingConfig.RekorLogURLs()
-	log.Printf("Found %d Rekor services", len(allRekorServices))
+	log.Printf("Found %d Rekor services: %+v", len(allRekorServices), allRekorServices)
 	rekorVersion := getRekorVersion(allRekorServices, *serverURL)
 	switch rekorVersion {
 	case 1:
