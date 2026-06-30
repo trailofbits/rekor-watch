@@ -365,12 +365,19 @@ as a local email server.
 
 ### Quick start
 
+The webhook signing-secret master key is required, so generate it next to the
+compose file before the first start (see [Signing secret](#signing-secret) for
+details):
+
 ```bash
+openssl rand -base64 32 > webhook_secret.key
+chmod 644 webhook_secret.key
 docker compose --profile watch up --build
 ```
 
-This starts the web UI at <http://localhost:8080> and the mailpit inbox at
-<http://localhost:8025>.
+Compose bind-mounts `./webhook_secret.key` read-only into the container, so the
+file must exist (with `chmod 644`) before `up`. This starts the web UI at
+<http://localhost:8080> and the mailpit inbox at <http://localhost:8025>.
 
 ### Configuration
 
@@ -388,6 +395,7 @@ Key configuration groups:
 | Core | `REKOR_WATCH_INTERVAL`, `REKOR_WATCH_BASE_URL`, `REKOR_WATCH_SERVER_URL` | Polling frequency, public URL, log server |
 | SMTP | `REKOR_WATCH_SMTP_HOST`, `_PORT`, `_FROM`, `_USERNAME`, `_PASSWORD`, `_USE_TLS` | Point to a real SMTP server for production |
 | Security | `REKOR_WATCH_ALLOW_PRIVATE_WEBHOOKS`, `REKOR_WATCH_TRUST_PROXY_HEADERS` | Disable private webhooks and enable proxy headers in production |
+| Webhooks | `REKOR_WATCH_WEBHOOK_SECRET_KEY_FILE` | **Required.** Under Compose this is the *host* path to the master-key file, which is bind-mounted read-only into the container (default `./webhook_secret.key`) — see [Signing secret](#signing-secret) |
 | Ports | `REKOR_WATCH_LISTEN`, `REKOR_WATCH_HOST_PORT`, `MAILPIT_LISTEN` | Bind address and port mapping |
 
 See `.env.example` for the full list of options with descriptions.
@@ -438,6 +446,35 @@ today) and read `timestamp` (RFC3339, UTC) as the delivery time. Under `data`,
 `subscription_name` is the subscription's human-readable name, `monitored_value`
 mirrors the subscription's matcher, and `entries` is a list with up to 100
 elements. Order within `entries` is unspecified.
+
+### Signing secret
+
+Each webhook subscription has its own signing secret — the
+[Standard Webhooks](https://www.standardwebhooks.com/) `whsec_…` value. Secrets
+are derived on demand from a single master key and never stored, so the
+dashboard reveals a subscription's secret **once**: when the webhook is created
+and when you click *Regenerate secret*. Copy it then. Editing a subscription
+(including changing its URL) does not rotate the secret — use *Regenerate
+secret* for that.
+
+The master key is mandatory — the watcher refuses to start without it. Point
+`REKOR_WATCH_WEBHOOK_SECRET_KEY_FILE` at a file holding the standard base64
+encoding of **at least 32 random bytes**:
+
+```bash
+openssl rand -base64 32 > webhook_secret.key
+chmod 644 webhook_secret.key
+export REKOR_WATCH_WEBHOOK_SECRET_KEY_FILE="$PWD/webhook_secret.key"
+```
+
+Under Docker Compose you don't set this env var to a container path: point
+`REKOR_WATCH_WEBHOOK_SECRET_KEY_FILE` at the key file's *host* path (or leave it
+unset to use `./webhook_secret.key` next to the compose file). Compose
+bind-mounts that file read-only into the container.
+
+Keep the file private and back it up: every subscription's secret is derived
+from it, so replacing the key invalidates all existing webhook secrets and each
+consumer must copy its new secret.
 
 ### Deduplication contract
 

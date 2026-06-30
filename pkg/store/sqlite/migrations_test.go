@@ -37,7 +37,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const expectedVersion = 8
+const expectedVersion = 9
 
 // minVersionWithDown is the lowest migration version required to ship a
 // .down.sql. Migration 1 predates the policy and is intentionally

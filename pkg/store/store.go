@@ -35,6 +35,10 @@ var ErrNotFound = errors.New("not found")
 // the owning user already has a subscription with the same name.
 var ErrDuplicateName = errors.New("subscription name already in use")
 
+// ErrNotWebhook is returned when a webhook-only operation (such as regenerating
+// the signing secret) targets a subscription that is not a webhook.
+var ErrNotWebhook = errors.New("subscription is not a webhook subscription")
+
 // CheckpointStore defines the interface for storing and retrieving checkpoints.
 // Implementations can use SQLite, PostgreSQL, or any other storage backend.
 type CheckpointStore interface {
@@ -157,17 +161,21 @@ const (
 
 // Subscription links a user to a monitored value and a notification channel.
 type Subscription struct {
-	ID                  int64
-	UserID              int64
-	Name                string
-	MonitoredValue      identity.MonitoredValue
-	NotificationType    NotificationType
-	WebhookURL          string
-	ConsecutiveFailures int
-	LastFailureAt       *time.Time
-	DisabledAt          *time.Time
-	NextRetryAt         *time.Time
-	CreatedAt           time.Time
+	ID               int64
+	UserID           int64
+	Name             string
+	MonitoredValue   identity.MonitoredValue
+	NotificationType NotificationType
+	WebhookURL       string
+	// WebhookSecretVersion is the counter the signing secret is derived from
+	// (the secret itself is never stored). Internal bookkeeping, so it is not
+	// serialized in API responses.
+	WebhookSecretVersion int `json:"-"`
+	ConsecutiveFailures  int
+	LastFailureAt        *time.Time
+	DisabledAt           *time.Time
+	NextRetryAt          *time.Time
+	CreatedAt            time.Time
 }
 
 // SubscriptionStore defines the interface for storing and retrieving subscriptions.
@@ -176,10 +184,12 @@ type SubscriptionStore interface {
 	// Returns ErrDuplicateName if the user already has a subscription with the same name.
 	SaveSubscription(ctx context.Context, sub *Subscription) error
 
-	// UpdateSubscription updates an existing subscription's name, monitored value,
-	// webhook URL, and notification type.
-	// Returns ErrNotFound if the subscription does not exist or does not belong to the given user.
-	// Returns ErrDuplicateName if the user already has another subscription with the same name.
+	// UpdateSubscription updates a subscription's name, monitored value, webhook
+	// URL, and notification type. It never rotates the webhook signing secret —
+	// the secret changes only on an explicit regenerate — so changing the URL
+	// here leaves WebhookSecretVersion untouched. Returns ErrNotFound if the
+	// subscription does not exist or belong to the user, and ErrDuplicateName on
+	// a name clash.
 	UpdateSubscription(ctx context.Context, sub *Subscription) error
 
 	// DeleteSubscription deletes a subscription by ID, scoped to the given user.
@@ -205,6 +215,14 @@ type SubscriptionStore interface {
 	// and stores the pre-computed nextRetryAt for backoff scheduling.
 	// Returns the new consecutive failure count.
 	RecordNotificationFailure(ctx context.Context, subscriptionID int64, lastFailureAt, nextRetryAt time.Time) (int, error)
+
+	// RegenerateWebhookSecret bumps the subscription's webhook signing-secret
+	// version counter, scoped to the owning user, and returns the new version.
+	// A new version yields a freshly derived secret and retires the old one
+	// (hard cutover). Returns ErrNotFound if the subscription does not exist or
+	// does not belong to the given user, and ErrNotWebhook if it exists and is
+	// owned by the user but is not a webhook subscription.
+	RegenerateWebhookSecret(ctx context.Context, id, userID int64) (newVersion int, err error)
 
 	// SetSubscriptionEnabled enables or disables a subscription.
 	// Backoff state (consecutive_failures, last_failure_at, next_retry_at) is

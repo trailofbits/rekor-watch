@@ -476,10 +476,40 @@ section h2 {
 .btn-enable,
 .btn-disable,
 .btn-edit,
-.btn-delete {
+.btn-delete,
+.btn-regenerate {
     padding: 0.375rem 0.75rem;
     font-size: 0.8125rem;
     background: transparent;
+}
+
+.btn-regenerate {
+    color: var(--warning-color, #f59e0b);
+    border: 1px solid var(--warning-color, #f59e0b);
+}
+
+.btn-regenerate:hover {
+    background: rgba(245, 158, 11, 0.05);
+}
+
+.secret-reveal {
+    margin: 1rem 0;
+    padding: 1rem;
+    border: 1px solid var(--warning-color, #f59e0b);
+    border-radius: 6px;
+    background: rgba(245, 158, 11, 0.05);
+}
+
+.secret-reveal .secret-warning {
+    margin: 0.5rem 0;
+    color: var(--warning-color, #f59e0b);
+    font-size: 0.875rem;
+}
+
+.secret-reveal .secret-value {
+    width: 100%;
+    margin-bottom: 0.5rem;
+    font-family: monospace;
 }
 
 .btn-enable {
