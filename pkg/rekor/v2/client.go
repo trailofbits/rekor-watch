@@ -73,6 +73,19 @@ func RefreshSigningConfig(tufClient *tuf.Client) (*root.SigningConfig, error) {
 	return signingConfig, nil
 }
 
+// ShardTarget is a Rekor v2 shard to monitor. Origin is tracked separately
+// from the read URL because a log's read path is not guaranteed to match the
+// origin its checkpoints carry: the public deployment fronts writes with a
+// global load balancer that does not serve reads.
+type ShardTarget struct {
+	ReadURL string
+	Origin  string
+	// ValidityStart orders targets from newest to oldest. ValidityEnd is the
+	// zero time for a shard that has not been retired.
+	ValidityStart time.Time
+	ValidityEnd   time.Time
+}
+
 func filterV2Shards(rekorServices []root.Service) []root.Service {
 	// First we sort and filter the Rekor services so that they're ordered from
 	// newest to oldest. We filter them so that we:
@@ -95,46 +108,75 @@ func filterV2Shards(rekorServices []root.Service) []root.Service {
 	return rekorV2Services
 }
 
-func ShardsNeedUpdating(currentShards map[string]ShardInfo, newSigningConfig *root.SigningConfig) (bool, error) {
-	newShards := newSigningConfig.RekorLogURLs()
-	newV2Shards := filterV2Shards(newShards)
+// shardTargetsFromServices converts the Rekor services of a signing config
+// into shard targets, ordered from newest to oldest. The origin is derived from
+// the service URL, which is the only origin a signing config offers.
+func shardTargetsFromServices(rekorServices []root.Service) ([]ShardTarget, error) {
+	v2Services := filterV2Shards(rekorServices)
+	targets := make([]ShardTarget, 0, len(v2Services))
+	for _, service := range v2Services {
+		origin, err := tiles.GetOrigin(service.URL)
+		if err != nil {
+			return nil, err
+		}
+		targets = append(targets, ShardTarget{
+			ReadURL:       service.URL,
+			Origin:        origin,
+			ValidityStart: service.ValidityPeriodStart,
+			ValidityEnd:   service.ValidityPeriodEnd,
+		})
+	}
+	return targets, nil
+}
 
-	if len(newV2Shards) == 0 {
+func ShardsNeedUpdating(currentShards map[string]ShardInfo, newSigningConfig *root.SigningConfig) (bool, error) {
+	newTargets, err := shardTargetsFromServices(newSigningConfig.RekorLogURLs())
+	if err != nil {
+		return false, err
+	}
+	if len(newTargets) == 0 {
 		return false, fmt.Errorf("error fetching Rekor shards: no v2 shards found in SigningConfig")
 	}
+	return TargetsNeedUpdating(currentShards, newTargets), nil
+}
 
-	if len(currentShards) != len(newV2Shards) {
-		// Shards were added/removed, need to update
-		return true, nil
+// TargetsNeedUpdating reports whether the monitored shards no longer match
+// targets, either because a shard was added or removed or because a shard's
+// validity end time changed.
+func TargetsNeedUpdating(currentShards map[string]ShardInfo, targets []ShardTarget) bool {
+	if len(currentShards) != len(targets) {
+		return true
 	}
 
-	for _, newShard := range newV2Shards {
-		newShardOrigin, err := tiles.GetOrigin(newShard.URL)
-		if err != nil {
-			return false, err
-		}
-
-		matchingShard, ok := currentShards[newShardOrigin]
+	for _, target := range targets {
+		matchingShard, ok := currentShards[target.Origin]
 		switch {
 		case !ok:
-			// The shard in the new SigningConfig is not present
-			// in the existing shards, so we need to update
-			return true, nil
-		case matchingShard.validityEnd != newShard.ValidityPeriodEnd:
-			// The newest shard in the SigningConfig is present in
-			// the existing shards, but the end validity time changed
-			return true, nil
+			// The target is not among the shards being monitored
+			return true
+		case matchingShard.validityEnd != target.ValidityEnd:
+			// The target is being monitored, but its end validity time changed
+			return true
 		}
 	}
 
-	// All the shards in the new SigningConfig are present in
-	// the existing shards, and they have the same validity end time
-	return false, nil
+	// Every target is already being monitored with the same validity end time
+	return false
 }
 
 func GetRekorShards(ctx context.Context, trustedRoot *root.TrustedRoot, rekorServices []root.Service, userAgent, certChain string) (map[string]ShardInfo, string, error) {
-	rekorV2Services := filterV2Shards(rekorServices)
-	if len(rekorV2Services) == 0 {
+	targets, err := shardTargetsFromServices(rekorServices)
+	if err != nil {
+		return nil, "", err
+	}
+	return GetRekorShardsForTargets(ctx, trustedRoot, targets, userAgent, certChain)
+}
+
+// GetRekorShardsForTargets builds a read client for each target and returns the
+// clients keyed by log origin, along with the origin of the latest shard.
+// targets must be ordered from newest to oldest.
+func GetRekorShardsForTargets(ctx context.Context, trustedRoot *root.TrustedRoot, targets []ShardTarget, userAgent, certChain string) (map[string]ShardInfo, string, error) {
+	if len(targets) == 0 {
 		return nil, "", fmt.Errorf("failed to find any Rekor v2 shards")
 	}
 
@@ -150,21 +192,11 @@ func GetRekorShards(ctx context.Context, trustedRoot *root.TrustedRoot, rekorSer
 	}
 
 	rekorShards := make(map[string]ShardInfo)
-	latestShardOrigin := ""
-	for _, service := range rekorV2Services {
-		var err error
-		origin, err := tiles.GetOrigin(service.URL)
-		if err != nil {
-			return nil, "", err
-		}
-
-		// The services in rekorV2Services are ordered from newest to oldest,
-		// so we store the origin of the first one as the origin
-		// of the latest shard
-		if latestShardOrigin == "" {
-			latestShardOrigin = origin
-		}
-		parsedURL, err := url.Parse(service.URL)
+	// targets are ordered from newest to oldest, so the first one is the
+	// latest shard
+	latestShardOrigin := targets[0].Origin
+	for _, target := range targets {
+		parsedURL, err := url.Parse(target.ReadURL)
 		if err != nil {
 			return nil, "", fmt.Errorf("error parsing Rekor url: %v", err)
 		}
@@ -174,7 +206,7 @@ func GetRekorShards(ctx context.Context, trustedRoot *root.TrustedRoot, rekorSer
 			return nil, "", err
 		}
 
-		rekorClient, err := read.NewReader(service.URL, origin, verifier, clientOpts...)
+		rekorClient, err := read.NewReader(target.ReadURL, target.Origin, verifier, clientOpts...)
 		if err != nil {
 			return nil, "", fmt.Errorf("getting Rekor client: %v", err)
 		}
@@ -183,10 +215,10 @@ func GetRekorShards(ctx context.Context, trustedRoot *root.TrustedRoot, rekorSer
 		// We verify the checkpoints of all v2 shards
 		checkpoint, _, err := rekorClient.ReadCheckpoint(ctx)
 		if err != nil {
-			return nil, "", fmt.Errorf("failed to get current checkpoint for log '%v': %v", origin, err)
+			return nil, "", fmt.Errorf("failed to get current checkpoint for log '%v': %v", target.Origin, err)
 		}
 
-		rekorShards[checkpoint.Origin] = ShardInfo{&rekorClient, &verifier, service.ValidityPeriodEnd}
+		rekorShards[checkpoint.Origin] = ShardInfo{&rekorClient, &verifier, target.ValidityEnd}
 	}
 	return rekorShards, latestShardOrigin, nil
 }
