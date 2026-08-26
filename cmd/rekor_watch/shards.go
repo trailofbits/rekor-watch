@@ -19,7 +19,9 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"time"
 
+	"github.com/sigstore/rekor-monitor/pkg/monitorconfig"
 	rekor_v2 "github.com/sigstore/rekor-monitor/pkg/rekor/v2"
 	"github.com/sigstore/sigstore-go/pkg/root"
 	"github.com/sigstore/sigstore-go/pkg/tuf"
@@ -32,26 +34,39 @@ type shardTracker struct {
 	shards            map[string]rekor_v2.ShardInfo
 	latestShardOrigin string
 
-	refreshSigningConfig func() (*root.SigningConfig, error)
-	shardsNeedUpdating   func(map[string]rekor_v2.ShardInfo, *root.SigningConfig) (bool, error)
-	fetchShards          func(context.Context, *root.SigningConfig) (map[string]rekor_v2.ShardInfo, string, error)
+	refreshTargets     func() ([]rekor_v2.ShardTarget, error)
+	shardsNeedUpdating func(map[string]rekor_v2.ShardInfo, []rekor_v2.ShardTarget) bool
+	fetchShards        func(context.Context, []rekor_v2.ShardTarget) (map[string]rekor_v2.ShardInfo, string, error)
 }
 
 // newShardTracker fetches the initial shard set; it errors so startup can fail
-// fast. The trusted root is derived from tufClient (and re-derived on each
-// fetch, so a rollover picks up a rotated trust root).
-func newShardTracker(ctx context.Context, tufClient *tuf.Client, userAgent, httpsChainPath string) (*shardTracker, error) {
+// fast. The shards to follow come from the monitor config at
+// monitorConfigPath, resolved against the trusted root derived from tufClient
+// (both re-read on each refresh, so a rollover picks up a newly listed shard
+// and a rotated trust root).
+func newShardTracker(ctx context.Context, tufClient *tuf.Client, monitorConfigPath, userAgent, httpsChainPath string) (*shardTracker, error) {
 	t := &shardTracker{
-		refreshSigningConfig: func() (*root.SigningConfig, error) {
-			return rekor_v2.RefreshSigningConfig(tufClient)
+		refreshTargets: func() ([]rekor_v2.ShardTarget, error) {
+			config, err := monitorconfig.LoadFromFile(monitorConfigPath)
+			if err != nil {
+				return nil, err
+			}
+			if err := tufClient.Refresh(); err != nil {
+				return nil, fmt.Errorf("refreshing TUF client: %w", err)
+			}
+			trustedRoot, err := root.GetTrustedRoot(tufClient)
+			if err != nil {
+				return nil, fmt.Errorf("getting trusted root: %w", err)
+			}
+			return rekor_v2.ShardTargetsFromMonitorConfig(config, trustedRoot, time.Now())
 		},
-		shardsNeedUpdating: rekor_v2.ShardsNeedUpdating,
-		fetchShards: func(ctx context.Context, signingConfig *root.SigningConfig) (map[string]rekor_v2.ShardInfo, string, error) {
+		shardsNeedUpdating: rekor_v2.TargetsNeedUpdating,
+		fetchShards: func(ctx context.Context, targets []rekor_v2.ShardTarget) (map[string]rekor_v2.ShardInfo, string, error) {
 			trustedRoot, err := root.GetTrustedRoot(tufClient)
 			if err != nil {
 				return nil, "", fmt.Errorf("getting trusted root: %w", err)
 			}
-			return rekor_v2.GetRekorShards(ctx, trustedRoot, signingConfig.RekorLogURLs(), userAgent, httpsChainPath)
+			return rekor_v2.GetRekorShardsForTargets(ctx, trustedRoot, targets, userAgent, httpsChainPath)
 		},
 	}
 
@@ -67,20 +82,16 @@ func newShardTracker(ctx context.Context, tufClient *tuf.Client, userAgent, http
 // it leaves the existing shards untouched, so a transient TUF/network failure
 // does not drop the shards already being followed.
 func (t *shardTracker) refresh(ctx context.Context) error {
-	signingConfig, err := t.refreshSigningConfig()
+	targets, err := t.refreshTargets()
 	if err != nil {
-		return fmt.Errorf("refreshing signing config: %w", err)
+		return fmt.Errorf("refreshing shard targets: %w", err)
 	}
 
-	shouldUpdate, err := t.shardsNeedUpdating(t.shards, signingConfig)
-	if err != nil {
-		return fmt.Errorf("checking whether shards need updating: %w", err)
-	}
-	if !shouldUpdate {
+	if !t.shardsNeedUpdating(t.shards, targets) {
 		return nil
 	}
 
-	shards, latestShardOrigin, err := t.fetchShards(ctx, signingConfig)
+	shards, latestShardOrigin, err := t.fetchShards(ctx, targets)
 	if err != nil {
 		return fmt.Errorf("fetching updated shards: %w", err)
 	}
