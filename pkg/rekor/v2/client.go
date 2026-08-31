@@ -129,15 +129,47 @@ func shardTargetsFromServices(rekorServices []root.Service) ([]ShardTarget, erro
 	return targets, nil
 }
 
+// ShardsNeedUpdating deliberately does not delegate to TargetsNeedUpdating.
+// It resolves origins lazily, one shard at a time, so that a resized shard set
+// or an early mismatch is reported without parsing the remaining URLs. Routing
+// it through TargetsNeedUpdating would resolve every origin up front and turn
+// an unparseable URL in a later shard into an error where this reports an
+// update.
 func ShardsNeedUpdating(currentShards map[string]ShardInfo, newSigningConfig *root.SigningConfig) (bool, error) {
-	newTargets, err := shardTargetsFromServices(newSigningConfig.RekorLogURLs())
-	if err != nil {
-		return false, err
-	}
-	if len(newTargets) == 0 {
+	newShards := newSigningConfig.RekorLogURLs()
+	newV2Shards := filterV2Shards(newShards)
+
+	if len(newV2Shards) == 0 {
 		return false, fmt.Errorf("error fetching Rekor shards: no v2 shards found in SigningConfig")
 	}
-	return TargetsNeedUpdating(currentShards, newTargets), nil
+
+	if len(currentShards) != len(newV2Shards) {
+		// Shards were added/removed, need to update
+		return true, nil
+	}
+
+	for _, newShard := range newV2Shards {
+		newShardOrigin, err := tiles.GetOrigin(newShard.URL)
+		if err != nil {
+			return false, err
+		}
+
+		matchingShard, ok := currentShards[newShardOrigin]
+		switch {
+		case !ok:
+			// The shard in the new SigningConfig is not present
+			// in the existing shards, so we need to update
+			return true, nil
+		case matchingShard.validityEnd != newShard.ValidityPeriodEnd:
+			// The newest shard in the SigningConfig is present in
+			// the existing shards, but the end validity time changed
+			return true, nil
+		}
+	}
+
+	// All the shards in the new SigningConfig are present in
+	// the existing shards, and they have the same validity end time
+	return false, nil
 }
 
 // TargetsNeedUpdating reports whether the monitored shards no longer match
