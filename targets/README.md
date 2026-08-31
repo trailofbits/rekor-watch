@@ -17,6 +17,18 @@ protobuf-specs v0.5.2.
 `MonitorConfig` has no `media_type` field, so unlike `signing_config` the file
 name carries no version suffix.
 
+`rekor_watch` reads one of these files instead of the signing config to discover
+the shards to follow, selected with `--monitor-config` (or
+`REKOR_WATCH_MONITOR_CONFIG`), and defaulting to the staging file to match the
+default TUF repository:
+
+    rekor_watch --monitor-config targets/prod/monitor_config.json \
+                --tuf-repository default \
+                --url https://log2025-1.rekor.sigstore.dev
+
+The file is re-read on every refresh, so adding a shard to it is picked up
+without restarting the watcher.
+
 Monitors need this because the trusted root and signing config can no longer be
 joined on URL: the signing config now advertises a global load balancer for
 writes, which does not serve reads. Staging shows the divergence today —

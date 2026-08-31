@@ -24,11 +24,15 @@ RUN go mod download
 ADD ./cmd/ $APP_ROOT/src/cmd/
 ADD ./pkg/ $APP_ROOT/src/pkg/
 ADD ./internal/ $APP_ROOT/src/internal/
+ADD ./targets/ $APP_ROOT/src/targets/
 
 RUN CGO_ENABLED=0 go build -o rekor_watch ./cmd/rekor_watch
 RUN mkdir -p /data && chown nobody:nogroup /data
 
 FROM gcr.io/distroless/static-debian12:nonroot AS deploy
 COPY --from=builder /opt/app-root/src/rekor_watch /usr/local/bin/rekor_watch
+# The monitor config is not published by TUF yet, so the local copies are
+# shipped in the image; select one with REKOR_WATCH_MONITOR_CONFIG.
+COPY --from=builder /opt/app-root/src/targets/ /etc/rekor-watch/targets/
 COPY --from=builder --chown=nonroot:nonroot /data /data
 CMD ["rekor_watch"]
