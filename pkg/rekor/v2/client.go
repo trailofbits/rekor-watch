@@ -73,10 +73,10 @@ func RefreshSigningConfig(tufClient *tuf.Client) (*root.SigningConfig, error) {
 	return signingConfig, nil
 }
 
-// ShardTarget is a Rekor v2 shard to monitor. Origin is tracked separately
-// from the read URL because a log's read path is not guaranteed to match the
-// origin its checkpoints carry: the public deployment fronts writes with a
-// global load balancer that does not serve reads.
+// ShardTarget is a Rekor v2 shard to monitor. Origin is carried alongside the
+// read URL rather than derived from it, because a log's checkpoints keep their
+// origin even when read from somewhere else. A signing config cannot express
+// that, since it carries only URLs; a monitor config states both.
 type ShardTarget struct {
 	ReadURL string
 	Origin  string
