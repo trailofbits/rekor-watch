@@ -46,6 +46,8 @@ func TestShardTargetsFromMonitorConfig(t *testing.T) {
 	day := func(d int) time.Time { return time.Date(2026, 1, d, 0, 0, 0, 0, time.UTC) }
 
 	trustedRoot := &fakeTrustedMaterial{rekorLogs: map[string]*root.TransparencyLog{
+		// Retired before now, but still expected among the targets: entries
+		// already in it have to stay verifiable.
 		"key-old": {BaseURL: "https://old.rekor.example.dev", ValidityPeriodStart: day(1), ValidityPeriodEnd: day(10)},
 		"key-new": {BaseURL: "https://new.rekor.example.dev", ValidityPeriodStart: day(10)},
 		// Not yet serving entries, so not a shard to monitor.
