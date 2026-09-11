@@ -21,8 +21,6 @@ import (
 	"testing"
 )
 
-// TestLoadFromFileShippedConfigs checks the configs shipped in this repository,
-// so a typo in one is caught here rather than at startup.
 func TestLoadFromFileShippedConfigs(t *testing.T) {
 	for _, environment := range []string{"prod", "staging"} {
 		t.Run(environment, func(t *testing.T) {

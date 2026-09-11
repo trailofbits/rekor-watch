@@ -23,8 +23,7 @@ the shards to follow, selected with `--monitor-config` (or
 default TUF repository:
 
     rekor_watch --monitor-config targets/prod/monitor_config.json \
-                --tuf-repository default \
-                --url https://log2025-1.rekor.sigstore.dev
+                --tuf-repository default
 
 The file is re-read on every refresh, so adding a shard to it is picked up
 without restarting the watcher.

@@ -19,6 +19,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"slices"
 	"time"
 
 	"github.com/sigstore/rekor-monitor/pkg/monitorconfig"
@@ -33,17 +34,12 @@ import (
 type shardTracker struct {
 	shards            map[string]rekor_v2.ShardInfo
 	latestShardOrigin string
+	targets           []rekor_v2.ShardTarget
 
-	refreshTargets     func() ([]rekor_v2.ShardTarget, error)
-	shardsNeedUpdating func(map[string]rekor_v2.ShardInfo, []rekor_v2.ShardTarget) bool
-	fetchShards        func(context.Context, []rekor_v2.ShardTarget) (map[string]rekor_v2.ShardInfo, string, error)
+	refreshTargets func() ([]rekor_v2.ShardTarget, error)
+	fetchShards    func(context.Context, []rekor_v2.ShardTarget) (map[string]rekor_v2.ShardInfo, string, error)
 }
 
-// newShardTracker fetches the initial shard set; it errors so startup can fail
-// fast. The shards to follow come from the monitor config at
-// monitorConfigPath, resolved against the trusted root derived from tufClient
-// (both re-read on each refresh, so a rollover picks up a newly listed shard
-// and a rotated trust root).
 func newShardTracker(ctx context.Context, tufClient *tuf.Client, monitorConfigPath, userAgent, httpsChainPath string) (*shardTracker, error) {
 	t := &shardTracker{
 		refreshTargets: func() ([]rekor_v2.ShardTarget, error) {
@@ -60,7 +56,6 @@ func newShardTracker(ctx context.Context, tufClient *tuf.Client, monitorConfigPa
 			}
 			return rekor_v2.ShardTargetsFromMonitorConfig(config, trustedRoot, time.Now())
 		},
-		shardsNeedUpdating: rekor_v2.TargetsNeedUpdating,
 		fetchShards: func(ctx context.Context, targets []rekor_v2.ShardTarget) (map[string]rekor_v2.ShardInfo, string, error) {
 			trustedRoot, err := root.GetTrustedRoot(tufClient)
 			if err != nil {
@@ -87,7 +82,7 @@ func (t *shardTracker) refresh(ctx context.Context) error {
 		return fmt.Errorf("refreshing shard targets: %w", err)
 	}
 
-	if !t.shardsNeedUpdating(t.shards, targets) {
+	if slices.Equal(t.targets, targets) {
 		return nil
 	}
 
@@ -99,5 +94,6 @@ func (t *shardTracker) refresh(ctx context.Context) error {
 	log.Printf("Rekor shards updated: %d shards, latest shard origin %q (was %q)", len(shards), latestShardOrigin, t.latestShardOrigin)
 	t.shards = shards
 	t.latestShardOrigin = latestShardOrigin
+	t.targets = slices.Clone(targets)
 	return nil
 }

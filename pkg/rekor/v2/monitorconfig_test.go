@@ -23,7 +23,6 @@ import (
 	"github.com/sigstore/sigstore-go/pkg/root"
 )
 
-// fakeTrustedMaterial provides Rekor logs without needing a signed trusted root.
 type fakeTrustedMaterial struct {
 	root.BaseTrustedMaterial
 	rekorLogs map[string]*root.TransparencyLog
@@ -92,6 +91,21 @@ func TestShardTargetsFromMonitorConfig(t *testing.T) {
 	}
 	if !targets[1].ValidityEnd.Equal(day(10)) {
 		t.Errorf("retired target validity end = %v, want %v", targets[1].ValidityEnd, day(10))
+	}
+}
+
+func TestShardTargetsFromMonitorConfigRejectsDuplicateOrigins(t *testing.T) {
+	now := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+	trustedRoot := &fakeTrustedMaterial{rekorLogs: map[string]*root.TransparencyLog{
+		"key-one": {BaseURL: "https://known.rekor.example.dev", ValidityPeriodStart: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)},
+		"key-two": {BaseURL: "https://known.rekor.example.dev", ValidityPeriodStart: time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)},
+	}}
+	config := &monitor_v1.MonitorConfig{RekorLogs: []*monitor_v1.TransparencyLogMonitorConfig{
+		rekorLog("https://known.rekor.example.dev", 2, "known.rekor.example.dev"),
+	}}
+
+	if _, err := ShardTargetsFromMonitorConfig(config, trustedRoot, now); err == nil {
+		t.Fatal("expected an error for duplicate trusted-root origins, got nil")
 	}
 }
 

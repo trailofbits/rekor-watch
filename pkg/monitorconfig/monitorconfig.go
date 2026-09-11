@@ -33,8 +33,6 @@ func LoadFromFile(path string) (*monitor_v1.MonitorConfig, error) {
 		return nil, fmt.Errorf("reading monitor config: %w", err)
 	}
 
-	// protojson rejects unknown fields by default, so a misspelled field in a
-	// hand-written config is reported instead of being dropped.
 	config := &monitor_v1.MonitorConfig{}
 	if err := protojson.Unmarshal(contents, config); err != nil {
 		return nil, fmt.Errorf("parsing monitor config %s: %w", path, err)

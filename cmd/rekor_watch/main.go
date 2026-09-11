@@ -30,11 +30,9 @@ import (
 
 	"net/http"
 
-	monitor_v1 "github.com/sigstore/protobuf-specs/gen/pb-go/monitor/v1"
 	"github.com/sigstore/rekor-monitor/cmd/rekor_watch/web"
 	"github.com/sigstore/rekor-monitor/pkg/email"
 	"github.com/sigstore/rekor-monitor/pkg/identity"
-	"github.com/sigstore/rekor-monitor/pkg/monitorconfig"
 	safenet "github.com/sigstore/rekor-monitor/pkg/net"
 	"github.com/sigstore/rekor-monitor/pkg/store/sqlite"
 	rmutil "github.com/sigstore/rekor-monitor/pkg/util"
@@ -44,8 +42,7 @@ import (
 
 // Default values for monitoring job parameters
 const (
-	publicRekorServerURL = "https://log2025-alpha3.rekor.sigstage.dev"
-	TUFRepository        = "staging"
+	TUFRepository = "staging"
 	// The monitor config is not published by TUF, so it is read from a file
 	// shipped in this repository. The default tracks TUFRepository.
 	defaultMonitorConfigPath = "targets/staging/monitor_config.json"
@@ -78,7 +75,6 @@ const (
 
 // Environment variable names for configuration overrides
 const (
-	envServerURL            = "REKOR_WATCH_SERVER_URL"
 	envInterval             = "REKOR_WATCH_INTERVAL"
 	envUserAgent            = "REKOR_WATCH_USER_AGENT_STRING"
 	envTUFRepository        = "REKOR_WATCH_TUF_REPOSITORY"
@@ -181,24 +177,9 @@ func envOrDefaultDuration(envKey string, fallback time.Duration) time.Duration {
 	return fallback
 }
 
-// getRekorVersion returns the API version of the log that serverURL reads from,
-// according to the monitor config. An unlisted URL is an error rather than an
-// assumed version: guessing leaves the watcher running against a log it cannot
-// read.
-func getRekorVersion(monitorConfig *monitor_v1.MonitorConfig, serverURL string) (uint32, error) {
-	for _, logConfig := range monitorConfig.GetRekorLogs() {
-		if serverURL == logConfig.GetReadUrl() {
-			log.Printf("Found matching Rekor log for URL %s with API version %d", serverURL, logConfig.GetMajorApiVersion())
-			return logConfig.GetMajorApiVersion(), nil
-		}
-	}
-	return 0, fmt.Errorf("no Rekor log with read URL %s in the monitor config", serverURL)
-}
-
 func mainWithReturn() int {
 	log.Println("Starting rekor-watch...")
 
-	serverURL := flag.String("url", envOrDefault(envServerURL, publicRekorServerURL), envUsage(envServerURL, "URL to the server that is to be monitored"))
 	interval := flag.Duration("interval", envOrDefaultDuration(envInterval, defaultInterval), envUsage(envInterval, "Length of interval between each periodical consistency check"))
 	userAgentString := flag.String("user-agent", envOrDefault(envUserAgent, ""), envUsage(envUserAgent, "details to include in the user agent string"))
 	tufRepository := flag.String("tuf-repository", envOrDefault(envTUFRepository, TUFRepository), envUsage(envTUFRepository, "TUF repository to use. Can be 'default', 'staging' or a custom TUF repository URL."))
@@ -233,7 +214,7 @@ func mainWithReturn() int {
 		*smtpPassword = os.Getenv(envSMTPPassword)
 	}
 
-	log.Printf("Configuration: serverURL=%s, interval=%v, tufRepository=%s, monitorConfig=%s, dbPath=%s, webPort=%d", *serverURL, *interval, *tufRepository, *monitorConfigPath, *dbPath, *webPort)
+	log.Printf("Configuration: interval=%v, tufRepository=%s, monitorConfig=%s, dbPath=%s, webPort=%d", *interval, *tufRepository, *monitorConfigPath, *dbPath, *webPort)
 
 	if *caIntermediatesFilePath != "" && *caRootsFilePath == "" {
 		log.Fatalf("ca-intermediates must be used together with --ca-roots")
@@ -263,13 +244,6 @@ func mainWithReturn() int {
 		log.Fatal(err)
 	}
 	log.Println("Trusted root fetched successfully")
-
-	log.Printf("Loading monitor config from %s...", *monitorConfigPath)
-	monitorConfig, err := monitorconfig.LoadFromFile(*monitorConfigPath)
-	if err != nil {
-		log.Fatal(err)
-	}
-	log.Printf("Monitor config loaded successfully: %d Rekor logs", len(monitorConfig.GetRekorLogs()))
 
 	log.Println("Configuring trusted CAs...")
 	newCARootsFile, newCAIntermediatesFile, cleanupTrustedCAs, err := rmutil.ConfigureTrustedCAs(*caRootsFilePath, *caIntermediatesFilePath, trustedRoot)
@@ -351,40 +325,24 @@ func mainWithReturn() int {
 		identity.WithCAIntermediatesFile(newCAIntermediatesFile),
 	}
 
-	rekorVersion, err := getRekorVersion(monitorConfig, *serverURL)
+	log.Println("Starting Rekor v2 main loop...")
+	tracker, err := newShardTracker(ctx, tufClient, *monitorConfigPath, finalUserAgent, *httpsChainPath)
 	if err != nil {
-		log.Printf("%v\n", err)
+		log.Printf("error getting Rekor shards: %v\n", err)
 		return 1
 	}
-	log.Printf("Using Rekor API version: %d", rekorVersion)
-	switch rekorVersion {
-	case 1:
-		log.Println("Rekor v1 selected - not yet implemented")
-		// TODO: Implement Rekor watch logic for rekor v1
-	case 2:
-		log.Println("Starting Rekor v2 main loop...")
-		tracker, err := newShardTracker(ctx, tufClient, *monitorConfigPath, finalUserAgent, *httpsChainPath)
-		if err != nil {
-			log.Printf("error getting Rekor shards: %v\n", err)
-			return 1
-		}
-		mon := &monitor{
-			tracker:    tracker,
-			store:      dbStore,
-			searchOpts: searchOpts,
-			maxMatches: *maxMatchesPerSubscription,
-		}
-		// Rate-limit outbound notifications to 5 per second per destination
-		// host to avoid overwhelming subscriber endpoints.
-		notificationLimiter := web.NewRateLimiter(5, 1*time.Second)
-		notif := newNotifier(dbStore, finalUserAgent, newWebhookClient(allowPrivateWebhooks), notificationLimiter, smtpSender)
-		notifyFn := func(ctx context.Context) error { return notif.runOnce(ctx, time.Now()) }
-		return monitorLoop(ctx, *interval, mon.runOnce, notifyFn)
-	default:
-		log.Printf("Unsupported server version %v, only '1' and '2' are supported\n", rekorVersion)
-		return 1
+	mon := &monitor{
+		tracker:    tracker,
+		store:      dbStore,
+		searchOpts: searchOpts,
+		maxMatches: *maxMatchesPerSubscription,
 	}
-	return 0
+	// Rate-limit outbound notifications to 5 per second per destination
+	// host to avoid overwhelming subscriber endpoints.
+	notificationLimiter := web.NewRateLimiter(5, 1*time.Second)
+	notif := newNotifier(dbStore, finalUserAgent, newWebhookClient(allowPrivateWebhooks), notificationLimiter, smtpSender)
+	notifyFn := func(ctx context.Context) error { return notif.runOnce(ctx, time.Now()) }
+	return monitorLoop(ctx, *interval, mon.runOnce, notifyFn)
 }
 
 // IterationFunc is a function that performs a single monitoring iteration.

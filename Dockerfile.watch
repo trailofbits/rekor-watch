@@ -32,7 +32,8 @@ RUN mkdir -p /data && chown nobody:nogroup /data
 FROM gcr.io/distroless/static-debian12:nonroot AS deploy
 COPY --from=builder /opt/app-root/src/rekor_watch /usr/local/bin/rekor_watch
 # The monitor config is not published by TUF yet, so the local copies are
-# shipped in the image; select one with REKOR_WATCH_MONITOR_CONFIG.
+# shipped in the image; override this to select a different deployment.
 COPY --from=builder /opt/app-root/src/targets/ /etc/rekor-watch/targets/
+ENV REKOR_WATCH_MONITOR_CONFIG=/etc/rekor-watch/targets/staging/monitor_config.json
 COPY --from=builder --chown=nonroot:nonroot /data /data
 CMD ["rekor_watch"]

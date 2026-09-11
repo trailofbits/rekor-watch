@@ -31,16 +31,43 @@ func shardSet(origins ...string) map[string]rekor_v2.ShardInfo {
 	return m
 }
 
-func TestShardTrackerRefresh_NoUpdate(t *testing.T) {
+func TestShardTrackerRefresh_ReadURLChange(t *testing.T) {
+	oldTarget := rekor_v2.ShardTarget{ReadURL: "https://old.example.dev", Origin: "origin-A"}
+	newTarget := rekor_v2.ShardTarget{ReadURL: "https://new.example.dev", Origin: "origin-A"}
 	fetched := false
 	tr := &shardTracker{
 		shards:            shardSet("origin-A"),
 		latestShardOrigin: "origin-A",
+		targets:           []rekor_v2.ShardTarget{oldTarget},
 		refreshTargets: func() ([]rekor_v2.ShardTarget, error) {
-			return []rekor_v2.ShardTarget{{Origin: "origin-A"}}, nil
+			return []rekor_v2.ShardTarget{newTarget}, nil
 		},
-		shardsNeedUpdating: func(map[string]rekor_v2.ShardInfo, []rekor_v2.ShardTarget) bool {
-			return false
+		fetchShards: func(_ context.Context, targets []rekor_v2.ShardTarget) (map[string]rekor_v2.ShardInfo, string, error) {
+			fetched = true
+			return shardSet("origin-A"), targets[0].Origin, nil
+		},
+	}
+
+	if err := tr.refresh(context.Background()); err != nil {
+		t.Fatalf("refresh returned error: %v", err)
+	}
+	if !fetched {
+		t.Fatal("fetchShards was not called after the read URL changed")
+	}
+	if tr.targets[0] != newTarget {
+		t.Fatalf("stored target = %+v, want %+v", tr.targets[0], newTarget)
+	}
+}
+
+func TestShardTrackerRefresh_NoUpdate(t *testing.T) {
+	fetched := false
+	targets := []rekor_v2.ShardTarget{{Origin: "origin-A"}}
+	tr := &shardTracker{
+		shards:            shardSet("origin-A"),
+		latestShardOrigin: "origin-A",
+		targets:           targets,
+		refreshTargets: func() ([]rekor_v2.ShardTarget, error) {
+			return targets, nil
 		},
 		fetchShards: func(context.Context, []rekor_v2.ShardTarget) (map[string]rekor_v2.ShardInfo, string, error) {
 			fetched = true
@@ -64,19 +91,14 @@ func TestShardTrackerRefresh_NoUpdate(t *testing.T) {
 
 func TestShardTrackerRefresh_Update(t *testing.T) {
 	wantTargets := []rekor_v2.ShardTarget{{Origin: "origin-B"}, {Origin: "origin-A"}}
-	var gotCurrentLen int
-	var decideTargets, fetchTargets []rekor_v2.ShardTarget
+	var fetchTargets []rekor_v2.ShardTarget
 
 	tr := &shardTracker{
 		shards:            shardSet("origin-A"),
 		latestShardOrigin: "origin-A",
+		targets:           []rekor_v2.ShardTarget{{Origin: "origin-A"}},
 		refreshTargets: func() ([]rekor_v2.ShardTarget, error) {
 			return wantTargets, nil
-		},
-		shardsNeedUpdating: func(current map[string]rekor_v2.ShardInfo, targets []rekor_v2.ShardTarget) bool {
-			gotCurrentLen = len(current)
-			decideTargets = targets
-			return true
 		},
 		fetchShards: func(_ context.Context, targets []rekor_v2.ShardTarget) (map[string]rekor_v2.ShardInfo, string, error) {
 			fetchTargets = targets
@@ -87,14 +109,11 @@ func TestShardTrackerRefresh_Update(t *testing.T) {
 	if err := tr.refresh(context.Background()); err != nil {
 		t.Fatalf("refresh returned error: %v", err)
 	}
-	if gotCurrentLen != 1 {
-		t.Fatalf("shardsNeedUpdating saw %d current shards, want 1", gotCurrentLen)
+	if len(fetchTargets) != len(wantTargets) || fetchTargets[0].Origin != "origin-B" {
+		t.Fatal("refreshed target order was not passed to fetchShards")
 	}
-	if len(decideTargets) != len(wantTargets) || len(fetchTargets) != len(wantTargets) {
-		t.Fatal("refreshed targets were not threaded through to decide/fetch")
-	}
-	if decideTargets[0].Origin != "origin-B" || fetchTargets[0].Origin != "origin-B" {
-		t.Fatal("target order was not preserved through to decide/fetch")
+	if len(tr.targets) != len(wantTargets) || tr.targets[0].Origin != "origin-B" {
+		t.Fatal("refreshed targets were not stored after a successful fetch")
 	}
 	if tr.latestShardOrigin != "origin-B" {
 		t.Fatalf("latestShardOrigin = %q, want origin-B", tr.latestShardOrigin)
@@ -105,16 +124,12 @@ func TestShardTrackerRefresh_Update(t *testing.T) {
 }
 
 func TestShardTrackerRefresh_TargetsError(t *testing.T) {
-	decided := false
 	tr := &shardTracker{
 		shards:            shardSet("origin-A"),
 		latestShardOrigin: "origin-A",
+		targets:           []rekor_v2.ShardTarget{{Origin: "origin-A"}},
 		refreshTargets: func() ([]rekor_v2.ShardTarget, error) {
 			return nil, errors.New("boom")
-		},
-		shardsNeedUpdating: func(map[string]rekor_v2.ShardInfo, []rekor_v2.ShardTarget) bool {
-			decided = true
-			return false
 		},
 		fetchShards: func(context.Context, []rekor_v2.ShardTarget) (map[string]rekor_v2.ShardInfo, string, error) {
 			t.Fatal("fetchShards must not run after a target refresh error")
@@ -125,9 +140,6 @@ func TestShardTrackerRefresh_TargetsError(t *testing.T) {
 	if err := tr.refresh(context.Background()); err == nil {
 		t.Fatal("expected error, got nil")
 	}
-	if decided {
-		t.Fatal("shardsNeedUpdating must not run after a target refresh error")
-	}
 	assertUnchanged(t, tr)
 }
 
@@ -135,11 +147,9 @@ func TestShardTrackerRefresh_FetchError(t *testing.T) {
 	tr := &shardTracker{
 		shards:            shardSet("origin-A"),
 		latestShardOrigin: "origin-A",
+		targets:           []rekor_v2.ShardTarget{{Origin: "origin-A"}},
 		refreshTargets: func() ([]rekor_v2.ShardTarget, error) {
 			return []rekor_v2.ShardTarget{{Origin: "origin-B"}}, nil
-		},
-		shardsNeedUpdating: func(map[string]rekor_v2.ShardInfo, []rekor_v2.ShardTarget) bool {
-			return true
 		},
 		fetchShards: func(context.Context, []rekor_v2.ShardTarget) (map[string]rekor_v2.ShardInfo, string, error) {
 			return nil, "", errors.New("boom")
@@ -159,6 +169,9 @@ func assertUnchanged(t *testing.T, tr *shardTracker) {
 	}
 	if _, ok := tr.shards["origin-A"]; !ok || len(tr.shards) != 1 {
 		t.Fatalf("shards mutated on failure: %v", keys(tr.shards))
+	}
+	if len(tr.targets) != 1 || tr.targets[0].Origin != "origin-A" {
+		t.Fatalf("targets mutated on failure: %+v", tr.targets)
 	}
 }
 

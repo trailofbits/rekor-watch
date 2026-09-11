@@ -16,23 +16,33 @@
 package v2
 
 import (
+	"context"
+	"crypto/tls"
 	"fmt"
+	"net/url"
 	"slices"
 	"time"
 
 	monitor_v1 "github.com/sigstore/protobuf-specs/gen/pb-go/monitor/v1"
 	"github.com/sigstore/rekor-monitor/pkg/tiles"
+	"github.com/sigstore/rekor-monitor/pkg/util"
+	tiles_client "github.com/sigstore/rekor-tiles/v2/pkg/client"
+	"github.com/sigstore/rekor-tiles/v2/pkg/client/read"
 	"github.com/sigstore/sigstore-go/pkg/root"
 )
 
-// ShardTargetsFromMonitorConfig resolves the Rekor v2 logs of a monitor config
-// against the trusted root, ordered from newest to oldest.
-//
-// A monitor config states where to read a log and what origin its checkpoints
-// carry, but not how long the log is valid, so the validity period comes from
-// the trusted root entry for the same log. Shards whose validity has not
-// started yet are left out: they hold no entries to monitor, and treating one
-// as the latest shard would stall monitoring on an empty log.
+// ShardTarget is a Rekor v2 shard from a monitor config. Origin is separate
+// from ReadURL because checkpoints retain their origin when served elsewhere.
+type ShardTarget struct {
+	ReadURL string
+	Origin  string
+	// ValidityStart and ValidityEnd delimit the shard's validity period. A zero
+	// ValidityEnd means the shard has not been retired.
+	ValidityStart time.Time
+	ValidityEnd   time.Time
+}
+
+// ShardTargetsFromMonitorConfig returns current and retired v2 logs, newest first.
 func ShardTargetsFromMonitorConfig(config *monitor_v1.MonitorConfig, trustedRoot root.TrustedMaterial, now time.Time) ([]ShardTarget, error) {
 	var targets []ShardTarget
 	for _, logConfig := range config.GetRekorLogs() {
@@ -65,34 +75,69 @@ func ShardTargetsFromMonitorConfig(config *monitor_v1.MonitorConfig, trustedRoot
 	return targets, nil
 }
 
-// findLogByOrigin returns the trusted root entry for the log with the given
-// origin, or nil if the log has one but its validity has not started yet.
-//
-// The trusted root identifies a log by base URL, which cannot be compared
-// against a read URL, so the origin derived from the base URL is the join key.
-// A log that rotated its key has one entry per key, all with the same origin;
-// the entry that started most recently is the one signing checkpoints now.
+// GetRekorShardsForTargets builds clients for targets ordered newest first.
+func GetRekorShardsForTargets(ctx context.Context, trustedRoot *root.TrustedRoot, targets []ShardTarget, userAgent, certChain string) (map[string]ShardInfo, string, error) {
+	if len(targets) == 0 {
+		return nil, "", fmt.Errorf("failed to find any Rekor v2 shards")
+	}
+
+	clientOpts := []tiles_client.Option{tiles_client.WithUserAgent(userAgent)}
+	var tlsConfig *tls.Config
+	if certChain != "" {
+		var err error
+		tlsConfig, err = util.TLSConfigForCA(certChain)
+		if err != nil {
+			return nil, "", fmt.Errorf("getting TLS config: %w", err)
+		}
+		clientOpts = append(clientOpts, tiles_client.WithTLSConfig(tlsConfig))
+	}
+
+	rekorShards := make(map[string]ShardInfo)
+	latestShardOrigin := targets[0].Origin
+	for _, target := range targets {
+		parsedURL, err := url.Parse(target.ReadURL)
+		if err != nil {
+			return nil, "", fmt.Errorf("error parsing Rekor url: %v", err)
+		}
+
+		verifier, err := GetLogVerifier(ctx, parsedURL, trustedRoot, userAgent, tlsConfig)
+		if err != nil {
+			return nil, "", err
+		}
+
+		rekorClient, err := read.NewReader(target.ReadURL, target.Origin, verifier, clientOpts...)
+		if err != nil {
+			return nil, "", fmt.Errorf("getting Rekor client: %v", err)
+		}
+
+		checkpoint, _, err := rekorClient.ReadCheckpoint(ctx)
+		if err != nil {
+			return nil, "", fmt.Errorf("failed to get current checkpoint for log '%v': %v", target.Origin, err)
+		}
+
+		rekorShards[checkpoint.Origin] = ShardInfo{&rekorClient, &verifier, target.ValidityEnd}
+	}
+	return rekorShards, latestShardOrigin, nil
+}
+
 func findLogByOrigin(trustedRoot root.TrustedMaterial, origin string, now time.Time) (*root.TransparencyLog, error) {
 	var match *root.TransparencyLog
-	found := false
 	for _, logInstance := range trustedRoot.RekorLogs() {
 		logOrigin, err := tiles.GetOrigin(logInstance.BaseURL)
 		if err != nil || logOrigin != origin {
 			continue
 		}
-		found = true
-		if logInstance.ValidityPeriodStart.IsZero() || logInstance.ValidityPeriodStart.After(now) {
-			continue
+		if match != nil {
+			return nil, fmt.Errorf("log origin %q appears more than once in the trusted root", origin)
 		}
-		if match == nil || logInstance.ValidityPeriodStart.After(match.ValidityPeriodStart) {
-			match = logInstance
-		}
+		match = logInstance
 	}
 
-	// A log named by the monitor config but absent from the trusted root has no
-	// key to verify its checkpoints with, so monitoring it is not possible.
-	if !found {
+	if match == nil {
 		return nil, fmt.Errorf("log %q in monitor config is not in the trusted root", origin)
+	}
+	if match.ValidityPeriodStart.IsZero() || match.ValidityPeriodStart.After(now) {
+		return nil, nil
 	}
 	return match, nil
 }
