@@ -368,7 +368,7 @@ func mainWithReturn() int {
 	// Rate-limit outbound notifications to 5 per second per destination
 	// host to avoid overwhelming subscriber endpoints.
 	notificationLimiter := web.NewRateLimiter(5, 1*time.Second)
-	notif := newNotifier(dbStore, finalUserAgent, newWebhookClient(allowPrivateWebhooks), notificationLimiter, smtpSender)
+	notif := newNotifier(dbStore, finalUserAgent, newWebhookClient(allowPrivateWebhooks), notificationLimiter, smtpSender, secretDeriver)
 	notifyFn := func(ctx context.Context) error { return notif.runOnce(ctx, time.Now()) }
 	return monitorLoop(ctx, *interval, mon.runOnce, notifyFn)
 }

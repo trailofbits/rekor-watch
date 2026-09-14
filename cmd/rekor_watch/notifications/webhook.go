@@ -22,6 +22,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
+	"time"
+
+	standardwebhooks "github.com/standard-webhooks/standard-webhooks/libraries/go"
 
 	safenet "github.com/sigstore/rekor-monitor/pkg/net"
 )
@@ -45,8 +49,11 @@ func NewWebhookSender(userAgent string, httpClient *http.Client) *WebhookSender 
 	}
 }
 
-// Send posts the payload as JSON to the given webhook URL.
-func (s *WebhookSender) Send(ctx context.Context, url string, payload NotificationPayload) error {
+// Send posts the payload as JSON to the given webhook URL. When eventID and
+// secret are both set, it signs the delivery with the Standard Webhooks v1
+// scheme (webhook-id/-timestamp/-signature headers over the marshalled body);
+// otherwise the request is byte-identical to an unsigned send.
+func (s *WebhookSender) Send(ctx context.Context, url string, payload NotificationPayload, eventID, secret string) error {
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("failed to build notification body: %w", err)
@@ -58,6 +65,22 @@ func (s *WebhookSender) Send(ctx context.Context, url string, payload Notificati
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", s.userAgent)
+
+	if eventID != "" && secret != "" {
+		// Read once: the same instant feeds both the signature and the header.
+		now := time.Now()
+		wh, err := standardwebhooks.NewWebhook(secret)
+		if err != nil {
+			return fmt.Errorf("failed to initialize webhook signer: %w", err)
+		}
+		sig, err := wh.Sign(eventID, now, body)
+		if err != nil {
+			return fmt.Errorf("failed to sign webhook delivery: %w", err)
+		}
+		req.Header.Set("webhook-id", eventID)
+		req.Header.Set("webhook-timestamp", strconv.FormatInt(now.Unix(), 10))
+		req.Header.Set("webhook-signature", sig)
+	}
 
 	resp, err := s.httpClient.Do(req)
 	if err != nil {

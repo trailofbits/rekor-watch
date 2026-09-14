@@ -476,6 +476,10 @@ Keep the file private and back it up: every subscription's secret is derived
 from it, so replacing the key invalidates all existing webhook secrets and each
 consumer must copy its new secret.
 
+Webhook deliveries carry Standard Webhooks `webhook-id`, `webhook-timestamp`,
+and `webhook-signature` headers. See the [verification guide](cmd/rekor_watch/web/templates/webhooks_docs.html)
+or open `/docs/webhooks` on your running instance.
+
 ### Deduplication contract
 
 The same match may be delivered more than once if a previous delivery's

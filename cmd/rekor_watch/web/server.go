@@ -234,6 +234,7 @@ func (s *Server) newMux() (*http.ServeMux, error) {
 
 	// Public routes
 	mux.HandleFunc(routeLanding, s.handleLanding)
+	mux.HandleFunc("GET /docs/webhooks", s.handleWebhookDocs)
 
 	// Public routes with IP rate limiting
 	mux.HandleFunc(routeLogin,
@@ -1143,4 +1144,9 @@ func (s *Server) setSubscriptionEnabled(w http.ResponseWriter, r *http.Request, 
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleWebhookDocs serves the public webhook signature verification guide.
+func (s *Server) handleWebhookDocs(w http.ResponseWriter, _ *http.Request) {
+	serveStaticTemplate(w, "templates/webhooks_docs.html")
 }

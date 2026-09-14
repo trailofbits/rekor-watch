@@ -83,14 +83,16 @@ type notifier struct {
 	webhook *notifications.WebhookSender
 	email   web.EmailSender
 	limiter *web.RateLimiter
+	deriver *notifications.WebhookSecretDeriver
 }
 
-func newNotifier(dbStore store.Store, userAgent string, httpClient *http.Client, limiter *web.RateLimiter, emailSender web.EmailSender) *notifier {
+func newNotifier(dbStore store.Store, userAgent string, httpClient *http.Client, limiter *web.RateLimiter, emailSender web.EmailSender, deriver *notifications.WebhookSecretDeriver) *notifier {
 	return &notifier{
 		store:   dbStore,
 		webhook: notifications.NewWebhookSender(userAgent, httpClient),
 		email:   emailSender,
 		limiter: limiter,
+		deriver: deriver,
 	}
 }
 
@@ -191,7 +193,17 @@ func (n *notifier) runOnce(ctx context.Context, now time.Time) error {
 					continue
 				}
 			}
-			sendErr = n.webhook.Send(ctx, sub.WebhookURL, payload)
+			if n.deriver == nil {
+				sendErr = fmt.Errorf("webhook secret deriver is required")
+				break
+			}
+			secret, err := n.deriver.Secret(subID, sub.WebhookSecretVersion)
+			if err != nil {
+				sendErr = fmt.Errorf("derive webhook secret: %w", err)
+				break
+			}
+			eventID := webhookEventID(subID, matchIDs[0], matchIDs[len(matchIDs)-1])
+			sendErr = n.webhook.Send(ctx, sub.WebhookURL, payload, eventID, secret)
 		case store.NotificationTypeEmail:
 			user := matches[0].User
 			subject, body := notifications.RenderMatchEmail(payload)
@@ -238,4 +250,9 @@ func webhookHost(rawURL string) string {
 		return rawURL
 	}
 	return u.Host
+}
+
+// webhookEventID identifies a subscription batch by its first and last match IDs.
+func webhookEventID(subID, minMatchID, maxMatchID int64) string {
+	return fmt.Sprintf("sub_%d-batch_%d-%d", subID, minMatchID, maxMatchID)
 }
