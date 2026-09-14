@@ -458,9 +458,9 @@ async function submitSubscription() {
             const text = await response.text();
             throw new Error(text || `HTTP ${response.status}`);
         }
-        // Creating a webhook subscription, or editing one in a way that
-        // changes its URL, returns a freshly rotated signing secret exactly
-        // once. The field is absent otherwise.
+        // Creating a webhook subscription returns its signing secret exactly
+        // once. Editing a subscription never rotates the secret, so the field
+        // is absent there (use the regenerate action to rotate).
         const result = await response.json().catch(() => ({}));
         if (result && result.secret) {
             showRevealedSecret(result.secret);

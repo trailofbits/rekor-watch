@@ -21,7 +21,6 @@ import (
 	"testing"
 
 	rekor_v2 "github.com/sigstore/rekor-monitor/pkg/rekor/v2"
-	"github.com/sigstore/sigstore-go/pkg/root"
 )
 
 func shardSet(origins ...string) map[string]rekor_v2.ShardInfo {
@@ -32,18 +31,45 @@ func shardSet(origins ...string) map[string]rekor_v2.ShardInfo {
 	return m
 }
 
-func TestShardTrackerRefresh_NoUpdate(t *testing.T) {
+func TestShardTrackerRefresh_ReadURLChange(t *testing.T) {
+	oldTarget := rekor_v2.ShardTarget{ReadURL: "https://old.example.dev", Origin: "origin-A"}
+	newTarget := rekor_v2.ShardTarget{ReadURL: "https://new.example.dev", Origin: "origin-A"}
 	fetched := false
 	tr := &shardTracker{
 		shards:            shardSet("origin-A"),
 		latestShardOrigin: "origin-A",
-		refreshSigningConfig: func() (*root.SigningConfig, error) {
-			return &root.SigningConfig{}, nil
+		targets:           []rekor_v2.ShardTarget{oldTarget},
+		refreshTargets: func() ([]rekor_v2.ShardTarget, error) {
+			return []rekor_v2.ShardTarget{newTarget}, nil
 		},
-		shardsNeedUpdating: func(map[string]rekor_v2.ShardInfo, *root.SigningConfig) (bool, error) {
-			return false, nil
+		fetchShards: func(_ context.Context, targets []rekor_v2.ShardTarget) (map[string]rekor_v2.ShardInfo, string, error) {
+			fetched = true
+			return shardSet("origin-A"), targets[0].Origin, nil
 		},
-		fetchShards: func(context.Context, *root.SigningConfig) (map[string]rekor_v2.ShardInfo, string, error) {
+	}
+
+	if err := tr.refresh(context.Background()); err != nil {
+		t.Fatalf("refresh returned error: %v", err)
+	}
+	if !fetched {
+		t.Fatal("fetchShards was not called after the read URL changed")
+	}
+	if tr.targets[0] != newTarget {
+		t.Fatalf("stored target = %+v, want %+v", tr.targets[0], newTarget)
+	}
+}
+
+func TestShardTrackerRefresh_NoUpdate(t *testing.T) {
+	fetched := false
+	targets := []rekor_v2.ShardTarget{{Origin: "origin-A"}}
+	tr := &shardTracker{
+		shards:            shardSet("origin-A"),
+		latestShardOrigin: "origin-A",
+		targets:           targets,
+		refreshTargets: func() ([]rekor_v2.ShardTarget, error) {
+			return targets, nil
+		},
+		fetchShards: func(context.Context, []rekor_v2.ShardTarget) (map[string]rekor_v2.ShardInfo, string, error) {
 			fetched = true
 			return nil, "", nil
 		},
@@ -64,23 +90,18 @@ func TestShardTrackerRefresh_NoUpdate(t *testing.T) {
 }
 
 func TestShardTrackerRefresh_Update(t *testing.T) {
-	wantConfig := &root.SigningConfig{}
-	var gotCurrentLen int
-	var decideConfig, fetchConfig *root.SigningConfig
+	wantTargets := []rekor_v2.ShardTarget{{Origin: "origin-B"}, {Origin: "origin-A"}}
+	var fetchTargets []rekor_v2.ShardTarget
 
 	tr := &shardTracker{
 		shards:            shardSet("origin-A"),
 		latestShardOrigin: "origin-A",
-		refreshSigningConfig: func() (*root.SigningConfig, error) {
-			return wantConfig, nil
+		targets:           []rekor_v2.ShardTarget{{Origin: "origin-A"}},
+		refreshTargets: func() ([]rekor_v2.ShardTarget, error) {
+			return wantTargets, nil
 		},
-		shardsNeedUpdating: func(current map[string]rekor_v2.ShardInfo, sc *root.SigningConfig) (bool, error) {
-			gotCurrentLen = len(current)
-			decideConfig = sc
-			return true, nil
-		},
-		fetchShards: func(_ context.Context, sc *root.SigningConfig) (map[string]rekor_v2.ShardInfo, string, error) {
-			fetchConfig = sc
+		fetchShards: func(_ context.Context, targets []rekor_v2.ShardTarget) (map[string]rekor_v2.ShardInfo, string, error) {
+			fetchTargets = targets
 			return shardSet("origin-A", "origin-B"), "origin-B", nil
 		},
 	}
@@ -88,11 +109,11 @@ func TestShardTrackerRefresh_Update(t *testing.T) {
 	if err := tr.refresh(context.Background()); err != nil {
 		t.Fatalf("refresh returned error: %v", err)
 	}
-	if gotCurrentLen != 1 {
-		t.Fatalf("shardsNeedUpdating saw %d current shards, want 1", gotCurrentLen)
+	if len(fetchTargets) != len(wantTargets) || fetchTargets[0].Origin != "origin-B" {
+		t.Fatal("refreshed target order was not passed to fetchShards")
 	}
-	if decideConfig != wantConfig || fetchConfig != wantConfig {
-		t.Fatal("refreshed SigningConfig was not threaded through to decide/fetch")
+	if len(tr.targets) != len(wantTargets) || tr.targets[0].Origin != "origin-B" {
+		t.Fatal("refreshed targets were not stored after a successful fetch")
 	}
 	if tr.latestShardOrigin != "origin-B" {
 		t.Fatalf("latestShardOrigin = %q, want origin-B", tr.latestShardOrigin)
@@ -102,45 +123,16 @@ func TestShardTrackerRefresh_Update(t *testing.T) {
 	}
 }
 
-func TestShardTrackerRefresh_SigningConfigError(t *testing.T) {
-	decided := false
+func TestShardTrackerRefresh_TargetsError(t *testing.T) {
 	tr := &shardTracker{
 		shards:            shardSet("origin-A"),
 		latestShardOrigin: "origin-A",
-		refreshSigningConfig: func() (*root.SigningConfig, error) {
+		targets:           []rekor_v2.ShardTarget{{Origin: "origin-A"}},
+		refreshTargets: func() ([]rekor_v2.ShardTarget, error) {
 			return nil, errors.New("boom")
 		},
-		shardsNeedUpdating: func(map[string]rekor_v2.ShardInfo, *root.SigningConfig) (bool, error) {
-			decided = true
-			return false, nil
-		},
-		fetchShards: func(context.Context, *root.SigningConfig) (map[string]rekor_v2.ShardInfo, string, error) {
-			t.Fatal("fetchShards must not run after a SigningConfig error")
-			return nil, "", nil
-		},
-	}
-
-	if err := tr.refresh(context.Background()); err == nil {
-		t.Fatal("expected error, got nil")
-	}
-	if decided {
-		t.Fatal("shardsNeedUpdating must not run after a SigningConfig error")
-	}
-	assertUnchanged(t, tr)
-}
-
-func TestShardTrackerRefresh_NeedUpdatingError(t *testing.T) {
-	tr := &shardTracker{
-		shards:            shardSet("origin-A"),
-		latestShardOrigin: "origin-A",
-		refreshSigningConfig: func() (*root.SigningConfig, error) {
-			return &root.SigningConfig{}, nil
-		},
-		shardsNeedUpdating: func(map[string]rekor_v2.ShardInfo, *root.SigningConfig) (bool, error) {
-			return false, errors.New("boom")
-		},
-		fetchShards: func(context.Context, *root.SigningConfig) (map[string]rekor_v2.ShardInfo, string, error) {
-			t.Fatal("fetchShards must not run after a comparison error")
+		fetchShards: func(context.Context, []rekor_v2.ShardTarget) (map[string]rekor_v2.ShardInfo, string, error) {
+			t.Fatal("fetchShards must not run after a target refresh error")
 			return nil, "", nil
 		},
 	}
@@ -155,13 +147,11 @@ func TestShardTrackerRefresh_FetchError(t *testing.T) {
 	tr := &shardTracker{
 		shards:            shardSet("origin-A"),
 		latestShardOrigin: "origin-A",
-		refreshSigningConfig: func() (*root.SigningConfig, error) {
-			return &root.SigningConfig{}, nil
+		targets:           []rekor_v2.ShardTarget{{Origin: "origin-A"}},
+		refreshTargets: func() ([]rekor_v2.ShardTarget, error) {
+			return []rekor_v2.ShardTarget{{Origin: "origin-B"}}, nil
 		},
-		shardsNeedUpdating: func(map[string]rekor_v2.ShardInfo, *root.SigningConfig) (bool, error) {
-			return true, nil
-		},
-		fetchShards: func(context.Context, *root.SigningConfig) (map[string]rekor_v2.ShardInfo, string, error) {
+		fetchShards: func(context.Context, []rekor_v2.ShardTarget) (map[string]rekor_v2.ShardInfo, string, error) {
 			return nil, "", errors.New("boom")
 		},
 	}
@@ -179,6 +169,9 @@ func assertUnchanged(t *testing.T, tr *shardTracker) {
 	}
 	if _, ok := tr.shards["origin-A"]; !ok || len(tr.shards) != 1 {
 		t.Fatalf("shards mutated on failure: %v", keys(tr.shards))
+	}
+	if len(tr.targets) != 1 || tr.targets[0].Origin != "origin-A" {
+		t.Fatalf("targets mutated on failure: %+v", tr.targets)
 	}
 }
 

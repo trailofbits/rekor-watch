@@ -82,8 +82,6 @@ const (
 	routeAPISubscriptionsByIDDisable = "/api/subscriptions/{id}/disable"
 
 	routeAPISubscriptionsByIDRegenerateSecret = "/api/subscriptions/{id}/regenerate-secret" //nolint:gosec // G101: HTTP route path, not a credential
-
-	routeWebhookDocs = "/docs/webhooks"
 )
 
 // UserFromContext extracts the authenticated user from the request context.
@@ -236,7 +234,7 @@ func (s *Server) newMux() (*http.ServeMux, error) {
 
 	// Public routes
 	mux.HandleFunc(routeLanding, s.handleLanding)
-	mux.HandleFunc("GET "+routeWebhookDocs, s.handleWebhookDocs)
+	mux.HandleFunc("GET /docs/webhooks", s.handleWebhookDocs)
 
 	// Public routes with IP rate limiting
 	mux.HandleFunc(routeLogin,
@@ -507,11 +505,6 @@ func (s *Server) handleLanding(w http.ResponseWriter, r *http.Request) {
 	}
 
 	serveStaticTemplate(w, "templates/landing.html")
-}
-
-// handleWebhookDocs serves the public webhook signature verification guide.
-func (s *Server) handleWebhookDocs(w http.ResponseWriter, _ *http.Request) {
-	serveStaticTemplate(w, "templates/webhooks_docs.html")
 }
 
 // handleLogin serves the login form (GET) or processes login (POST).
@@ -1058,8 +1051,7 @@ func (s *Server) handleUpdateSubscription(w http.ResponseWriter, r *http.Request
 		NotificationType: req.NotificationType,
 		WebhookURL:       req.WebhookURL,
 	}
-	secretRotated, err := s.store.UpdateSubscription(r.Context(), sub)
-	if err != nil {
+	if err := s.store.UpdateSubscription(r.Context(), sub); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			http.Error(w, "Subscription not found", http.StatusNotFound)
 			return
@@ -1068,26 +1060,14 @@ func (s *Server) handleUpdateSubscription(w http.ResponseWriter, r *http.Request
 			http.Error(w, fmt.Sprintf("You already have a subscription named %q", sub.Name), http.StatusConflict)
 			return
 		}
-		if errors.Is(err, store.ErrConcurrentModification) {
-			http.Error(w, "Subscription was modified concurrently; please retry", http.StatusConflict)
-			return
-		}
 		log.Printf("Error updating subscription: %v", err)
 		http.Error(w, "Failed to update subscription", http.StatusInternalServerError)
 		return
 	}
 
-	// Reveal the rotated secret once, mirroring create and regenerate.
+	// An update never rotates the signing secret (that happens only on an
+	// explicit regenerate), so no secret is revealed here.
 	resp := createSubscriptionResponse{Subscription: sub}
-	if secretRotated {
-		secret, err := s.secretDeriver.Secret(sub.ID, sub.WebhookSecretVersion)
-		if err != nil {
-			log.Printf("Error deriving webhook secret for subscription %d: %v", sub.ID, err)
-			http.Error(w, "Failed to update subscription", http.StatusInternalServerError)
-			return
-		}
-		resp.Secret = secret
-	}
 
 	data, err := json.Marshal(resp)
 	if err != nil {
@@ -1164,4 +1144,9 @@ func (s *Server) setSubscriptionEnabled(w http.ResponseWriter, r *http.Request, 
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleWebhookDocs serves the public webhook signature verification guide.
+func (s *Server) handleWebhookDocs(w http.ResponseWriter, _ *http.Request) {
+	serveStaticTemplate(w, "templates/webhooks_docs.html")
 }
