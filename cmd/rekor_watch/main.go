@@ -43,8 +43,9 @@ import (
 // Default values for monitoring job parameters
 const (
 	TUFRepository = "staging"
-	// The monitor config is not published by TUF, so it is read from a file
+	// The monitor config is not published by TUF yet, so it is read from a file
 	// shipped in this repository. The default tracks TUFRepository.
+	// See https://github.com/trailofbits/rekor-watch/issues/38
 	defaultMonitorConfigPath = "targets/staging/monitor_config.json"
 	defaultDBPath            = "rekor_watch.db"
 	defaultWebPort           = 8080

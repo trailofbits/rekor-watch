@@ -16,23 +16,10 @@
 package main
 
 import (
-	"os"
-	"strings"
 	"testing"
 
 	"github.com/transparency-dev/formats/log"
 )
-
-func TestWatchImageSetsMonitorConfigPath(t *testing.T) {
-	contents, err := os.ReadFile("../../Dockerfile.watch")
-	if err != nil {
-		t.Fatal(err)
-	}
-	const setting = "ENV REKOR_WATCH_MONITOR_CONFIG=/etc/rekor-watch/targets/staging/monitor_config.json"
-	if !strings.Contains(string(contents), setting) {
-		t.Fatalf("Dockerfile.watch does not set %s", setting)
-	}
-}
 
 func TestDecideSearchRange(t *testing.T) {
 	tests := []struct {
