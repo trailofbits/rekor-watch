@@ -42,6 +42,7 @@ services:
       # Container-specific defaults that differ from the app's built-in
       # defaults. These can still be overridden via .env.
       - REKOR_WATCH_DB_PATH=/data/rekor_watch.db
+      - REKOR_WATCH_MONITOR_CONFIG=${REKOR_WATCH_MONITOR_CONFIG:-/etc/rekor-watch/targets/staging/monitor_config.json}
       - REKOR_WATCH_SMTP_HOST=${REKOR_WATCH_SMTP_HOST:-mailpit}
       - REKOR_WATCH_SMTP_PORT=${REKOR_WATCH_SMTP_PORT:-1025}
       # Defaults to 0 (SSRF protection enabled); set to 1 only for
