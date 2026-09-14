@@ -55,7 +55,7 @@ const userContextKey contextKey = 0
 
 const sessionCookieName = "session_token"
 
-const sessionCookieMaxAgeHours = 24 * time.Hour
+const sessionCookieMaxAge = 24 * time.Hour
 
 type namedOIDOption struct {
 	Name string `json:"name"`
@@ -674,7 +674,7 @@ func (s *Server) handleAuthCallbackActivate(w http.ResponseWriter, r *http.Reque
 	session := &store.Session{
 		UserID:    user.ID,
 		TokenHash: auth.HashToken(sessionToken),
-		ExpiresAt: time.Now().UTC().Add(sessionCookieMaxAgeHours),
+		ExpiresAt: time.Now().UTC().Add(sessionCookieMaxAge),
 	}
 	if err := s.store.CreateSession(r.Context(), session); err != nil {
 		log.Printf("Error creating session: %v", err)
@@ -682,7 +682,7 @@ func (s *Server) handleAuthCallbackActivate(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	setSessionCookie(w, sessionToken, sessionCookieMaxAgeHours)
+	setSessionCookie(w, sessionToken, sessionCookieMaxAge)
 
 	w.Header().Set("Content-Type", "application/json")
 	fmt.Fprint(w, `{"ok":true}`)
