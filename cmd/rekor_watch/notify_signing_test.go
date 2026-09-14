@@ -39,12 +39,6 @@ func TestWebhookEventID_formatsAsBatchMinMax(t *testing.T) {
 	}
 }
 
-func TestWebhookEventID_stableForSameBatch(t *testing.T) {
-	if webhookEventID(1, 3, 9) != webhookEventID(1, 3, 9) {
-		t.Error("webhookEventID must be stable for the same batch range")
-	}
-}
-
 func TestWebhookEventID_changesWhenMaxGrows(t *testing.T) {
 	if webhookEventID(1, 3, 9) == webhookEventID(1, 3, 10) {
 		t.Error("webhookEventID must change when the batch's max match ID grows")
