@@ -392,7 +392,7 @@ Key configuration groups:
 
 | Group | Variables | Notes |
 |-------|-----------|-------|
-| Core | `REKOR_WATCH_INTERVAL`, `REKOR_WATCH_BASE_URL`, `REKOR_WATCH_SERVER_URL` | Polling frequency, public URL, log server |
+| Core | `REKOR_WATCH_INTERVAL`, `REKOR_WATCH_BASE_URL`, `REKOR_WATCH_MONITOR_CONFIG` | Polling frequency, public URL, monitor config |
 | SMTP | `REKOR_WATCH_SMTP_HOST`, `_PORT`, `_FROM`, `_USERNAME`, `_PASSWORD`, `_USE_TLS` | Point to a real SMTP server for production |
 | Security | `REKOR_WATCH_ALLOW_PRIVATE_WEBHOOKS`, `REKOR_WATCH_TRUST_PROXY_HEADERS` | Disable private webhooks and enable proxy headers in production |
 | Webhooks | `REKOR_WATCH_WEBHOOK_SECRET_KEY_FILE` | **Required.** Under Compose this is the *host* path to the master-key file, which is bind-mounted read-only into the container (default `./webhook_secret.key`) — see [Signing secret](#signing-secret) |
