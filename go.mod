@@ -21,7 +21,7 @@ require (
 	github.com/standard-webhooks/standard-webhooks/libraries v0.0.1
 	github.com/transparency-dev/formats v0.1.1
 	github.com/transparency-dev/merkle v0.0.2
-	github.com/transparency-dev/tessera v1.0.2
+	github.com/transparency-dev/tessera v1.0.4
 	github.com/wneessen/go-mail v0.7.3
 	go.step.sm/crypto v0.83.0
 	golang.org/x/crypto v0.53.0
