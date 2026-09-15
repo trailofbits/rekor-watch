@@ -27,7 +27,7 @@ require (
 	golang.org/x/crypto v0.53.0
 	golang.org/x/mod v0.37.0
 	golang.org/x/time v0.15.0
-	google.golang.org/protobuf v1.36.11
+	google.golang.org/protobuf v1.36.12
 	gopkg.in/yaml.v2 v2.4.0
 	modernc.org/sqlite v1.51.0
 	sigs.k8s.io/release-utils v0.12.4
