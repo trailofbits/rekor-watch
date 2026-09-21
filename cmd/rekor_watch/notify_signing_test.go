@@ -48,7 +48,7 @@ func TestWebhookEventID_changesWhenMaxGrows(t *testing.T) {
 func notifyTestDeriver(t *testing.T) *notifications.WebhookSecretDeriver {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "master.key")
-	key := base64.StdEncoding.EncodeToString([]byte("dispatch-master-key-0123456789ab")) // 32 bytes
+	key := base64.StdEncoding.EncodeToString([]byte("dispatch-master-key-0123456789abcd")) // 32 bytes
 	if err := os.WriteFile(path, []byte(key+"\n"), 0o600); err != nil {
 		t.Fatalf("failed to write key file: %v", err)
 	}
@@ -103,7 +103,7 @@ func TestSendNotifications_SignsWithDerivedSecret(t *testing.T) {
 	subID, _, version := firstSubscription(t, s)
 	deriver := notifyTestDeriver(t)
 
-	if err := sendNotifications(context.Background(), s, time.Now(), "test-ua", http.DefaultClient, nil, nil, deriver); err != nil {
+	if err := newNotifier(s, "test-ua", http.DefaultClient, nil, nil, deriver).runOnce(context.Background(), time.Now()); err != nil {
 		t.Fatalf("sendNotifications() error: %v", err)
 	}
 
@@ -160,7 +160,7 @@ func TestSendNotifications_UsesCurrentSecretVersion(t *testing.T) {
 	}
 
 	deriver := notifyTestDeriver(t)
-	if err := sendNotifications(context.Background(), s, time.Now(), "test-ua", http.DefaultClient, nil, nil, deriver); err != nil {
+	if err := newNotifier(s, "test-ua", http.DefaultClient, nil, nil, deriver).runOnce(context.Background(), time.Now()); err != nil {
 		t.Fatalf("sendNotifications() error: %v", err)
 	}
 
@@ -180,5 +180,30 @@ func TestSendNotifications_UsesCurrentSecretVersion(t *testing.T) {
 	oldSig := recomputeSig(t, oldSecret, got.id, ts, got.body)
 	if got.sig == oldSig {
 		t.Error("delivered signature still matches the retired version-1 secret")
+	}
+}
+
+func TestNotifier_MissingDeriverDoesNotDeliver(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		t.Error("webhook delivered without a signing key")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	s := setupTestStore(t)
+	insertSubAndMatch(t, s, srv.URL)
+	ctx := context.Background()
+	if err := newNotifier(s, "test", srv.Client(), nil, nil, nil).runOnce(ctx, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	pending, err := s.ListPendingMatches(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 1 {
+		t.Fatalf("pending matches = %d, want 1", len(pending))
+	}
+	sub := pending[0].Subscription
+	if sub.ConsecutiveFailures != 1 || sub.NextRetryAt == nil {
+		t.Fatalf("missing signing key did not schedule retry: %+v", sub)
 	}
 }
