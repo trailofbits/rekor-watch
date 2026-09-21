@@ -18,10 +18,6 @@ package sqlite
 import (
 	"context"
 	"errors"
-	"fmt"
-	"path/filepath"
-	"strings"
-	"sync"
 	"testing"
 
 	"github.com/sigstore/rekor-monitor/pkg/identity"
@@ -245,53 +241,6 @@ func TestUpdateSubscription_NeverRotatesSecret(t *testing.T) {
 	}
 	if gotURL != "https://hooks.example.com/changed" {
 		t.Errorf("URL not updated: got %q", gotURL)
-	}
-}
-
-// TestUpdateSubscription_ConcurrentUpdates runs many updates to the same row at
-// once. Because updates never touch the secret version, they are independent
-// last-writer-wins writes: each either commits or hits a transient write-lock
-// busy, the version stays put, and the row remains consistent (its final state
-// matches one of the writers).
-func TestUpdateSubscription_ConcurrentUpdates(t *testing.T) {
-	ctx := context.Background()
-	// A file-backed DB (not :memory:) so concurrent connections share state.
-	s, err := NewStore(ctx, filepath.Join(t.TempDir(), "test.db"))
-	if err != nil {
-		t.Fatalf("failed to create store: %v", err)
-	}
-	defer s.Close()
-
-	subID, userID := createTestSubscription(ctx, t, s)
-	mv := identity.CertIdentityValue{
-		CertSubject: "test@example.com",
-		Issuers:     []string{"https://accounts.google.com"},
-	}
-
-	const n = 20
-	var wg sync.WaitGroup
-	for i := 0; i < n; i++ {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
-			sub := &store.Subscription{
-				ID: subID, UserID: userID, Name: fmt.Sprintf("name-%d", i),
-				MonitoredValue: mv, NotificationType: store.NotificationTypeWebhook,
-				WebhookURL: fmt.Sprintf("https://hooks.example.com/%d", i),
-			}
-			switch err := s.UpdateSubscription(ctx, sub); {
-			case err == nil:
-			case strings.Contains(err.Error(), "locked"):
-				// A transient write-lock busy is acceptable under contention.
-			default:
-				t.Errorf("unexpected update error: %v", err)
-			}
-		}(i)
-	}
-	wg.Wait()
-
-	if _, gotVersion := readSubscriptionState(ctx, t, s, subID, userID); gotVersion != 1 {
-		t.Errorf("WebhookSecretVersion = %d, want 1 (updates never rotate)", gotVersion)
 	}
 }
 

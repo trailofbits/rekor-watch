@@ -80,7 +80,13 @@ limitations under the License.
                     <button class="btn btn-cancel" onclick="toggleAddSubscriptionForm()">Cancel</button>
                 </div>
             </div>
-            <div id="secret-reveal" class="secret-reveal" style="display:none"></div>
+            <div id="secret-reveal" class="secret-reveal" hidden>
+                <strong>Webhook signing secret</strong>
+                <p class="secret-warning">Copy it now — it won't be shown again. Lost secrets can only be replaced by regenerating.</p>
+                <input id="secret-value" class="secret-value" type="text" readonly>
+                <button type="button" class="btn btn-primary" onclick="copyRevealedSecret()">Copy</button>
+                <button type="button" class="btn btn-cancel" onclick="dismissRevealedSecret()">Dismiss</button>
+            </div>
             <div id="subscriptions-container">
                 <p class="loading">Loading subscriptions...</p>
             </div>

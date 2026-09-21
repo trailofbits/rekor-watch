@@ -161,15 +161,12 @@ const (
 
 // Subscription links a user to a monitored value and a notification channel.
 type Subscription struct {
-	ID               int64
-	UserID           int64
-	Name             string
-	MonitoredValue   identity.MonitoredValue
-	NotificationType NotificationType
-	WebhookURL       string
-	// WebhookSecretVersion is the counter the signing secret is derived from
-	// (the secret itself is never stored). Internal bookkeeping, so it is not
-	// serialized in API responses.
+	ID                   int64
+	UserID               int64
+	Name                 string
+	MonitoredValue       identity.MonitoredValue
+	NotificationType     NotificationType
+	WebhookURL           string
 	WebhookSecretVersion int `json:"-"`
 	ConsecutiveFailures  int
 	LastFailureAt        *time.Time
@@ -184,12 +181,10 @@ type SubscriptionStore interface {
 	// Returns ErrDuplicateName if the user already has a subscription with the same name.
 	SaveSubscription(ctx context.Context, sub *Subscription) error
 
-	// UpdateSubscription updates a subscription's name, monitored value, webhook
-	// URL, and notification type. It never rotates the webhook signing secret —
-	// the secret changes only on an explicit regenerate — so changing the URL
-	// here leaves WebhookSecretVersion untouched. Returns ErrNotFound if the
-	// subscription does not exist or belong to the user, and ErrDuplicateName on
-	// a name clash.
+	// UpdateSubscription updates an existing subscription's name, monitored value,
+	// webhook URL, and notification type.
+	// Returns ErrNotFound if the subscription does not exist or does not belong to the given user.
+	// Returns ErrDuplicateName if the user already has another subscription with the same name.
 	UpdateSubscription(ctx context.Context, sub *Subscription) error
 
 	// DeleteSubscription deletes a subscription by ID, scoped to the given user.

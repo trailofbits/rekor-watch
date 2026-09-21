@@ -98,8 +98,8 @@ const (
 	envSMTPAuthType         = "REKOR_WATCH_SMTP_AUTH_TYPE"
 	envAllowPrivateWebhooks = "REKOR_WATCH_ALLOW_PRIVATE_WEBHOOKS"
 
-	// envWebhookSecretKeyFile points at a 0600 file holding the base64 of a
-	// >= 32 byte master key used to derive per-subscription webhook signing
+	// envWebhookSecretKeyFile points at a file holding the base64 of a >= 32 byte
+	// master key used to derive per-subscription webhook signing
 	// secrets. Required: the watcher refuses to start without it so webhook
 	// deliveries are never sent unsigned. The key is delivered via file, not
 	// env, to keep it out of /proc/<pid>/environ.

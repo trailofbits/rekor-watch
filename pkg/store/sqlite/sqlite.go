@@ -471,10 +471,6 @@ func saveSubscription(ctx context.Context, exec dbExecutor, sub *store.Subscript
 	return nil
 }
 
-// updateSubscription updates the subscription's name, monitored value,
-// notification type, and webhook URL. It never touches webhook_secret_version:
-// the signing secret rotates only on an explicit regenerate, so an update never
-// changes the secret.
 func updateSubscription(ctx context.Context, exec dbExecutor, sub *store.Subscription) error {
 	if err := identity.VerifyMonitoredValues([]identity.MonitoredValue{sub.MonitoredValue}); err != nil {
 		return fmt.Errorf("failed to verify monitored value: %w", err)
@@ -485,11 +481,17 @@ func updateSubscription(ctx context.Context, exec dbExecutor, sub *store.Subscri
 		return fmt.Errorf("failed to serialize monitored value: %w", err)
 	}
 
-	res, err := exec.ExecContext(ctx, `
+	query := `
 		UPDATE subscriptions
-		SET name = ?, monitored_value = ?, notification_type = ?, webhook_url = ?
-		WHERE id = ? AND user_id = ?`,
-		sub.Name, monitoredValueJSON, sub.NotificationType, sub.WebhookURL,
+		SET name = ?, monitored_value = ?, webhook_url = ?, notification_type = ?
+		WHERE id = ? AND user_id = ?
+	`
+
+	result, err := exec.ExecContext(ctx, query,
+		sub.Name,
+		monitoredValueJSON,
+		sub.WebhookURL,
+		sub.NotificationType,
 		sub.ID, sub.UserID,
 	)
 	if err != nil {
@@ -498,13 +500,15 @@ func updateSubscription(ctx context.Context, exec dbExecutor, sub *store.Subscri
 		}
 		return fmt.Errorf("failed to update subscription: %w", err)
 	}
-	rows, err := res.RowsAffected()
+
+	rows, err := result.RowsAffected()
 	if err != nil {
-		return fmt.Errorf("failed to read rows affected: %w", err)
+		return fmt.Errorf("failed to get rows affected: %w", err)
 	}
 	if rows == 0 {
 		return fmt.Errorf("subscription %d not owned by user %d: %w", sub.ID, sub.UserID, store.ErrNotFound)
 	}
+
 	return nil
 }
 
@@ -986,8 +990,7 @@ func (s *Store) SaveSubscription(ctx context.Context, sub *store.Subscription) e
 	return saveSubscription(ctx, s.db, sub)
 }
 
-// UpdateSubscription updates a subscription's editable fields. It never rotates
-// the webhook signing secret (see updateSubscription).
+// UpdateSubscription updates an existing subscription.
 func (s *Store) UpdateSubscription(ctx context.Context, sub *store.Subscription) error {
 	return updateSubscription(ctx, s.db, sub)
 }
@@ -1149,7 +1152,6 @@ func (t *Tx) SaveSubscription(ctx context.Context, sub *store.Subscription) erro
 }
 
 // UpdateSubscription updates an existing subscription within the transaction.
-// It never rotates the webhook signing secret (see updateSubscription).
 func (t *Tx) UpdateSubscription(ctx context.Context, sub *store.Subscription) error {
 	return updateSubscription(ctx, t.tx, sub)
 }

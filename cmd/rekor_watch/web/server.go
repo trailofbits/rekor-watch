@@ -55,7 +55,7 @@ const userContextKey contextKey = 0
 
 const sessionCookieName = "session_token"
 
-const sessionCookieMaxAge = 24 * time.Hour
+const sessionCookieMaxAgeHours = 24 * time.Hour
 
 type namedOIDOption struct {
 	Name string `json:"name"`
@@ -674,7 +674,7 @@ func (s *Server) handleAuthCallbackActivate(w http.ResponseWriter, r *http.Reque
 	session := &store.Session{
 		UserID:    user.ID,
 		TokenHash: auth.HashToken(sessionToken),
-		ExpiresAt: time.Now().UTC().Add(sessionCookieMaxAge),
+		ExpiresAt: time.Now().UTC().Add(sessionCookieMaxAgeHours),
 	}
 	if err := s.store.CreateSession(r.Context(), session); err != nil {
 		log.Printf("Error creating session: %v", err)
@@ -682,7 +682,7 @@ func (s *Server) handleAuthCallbackActivate(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	setSessionCookie(w, sessionToken, sessionCookieMaxAge)
+	setSessionCookie(w, sessionToken, sessionCookieMaxAgeHours)
 
 	w.Header().Set("Content-Type", "application/json")
 	fmt.Fprint(w, `{"ok":true}`)
@@ -1064,11 +1064,7 @@ func (s *Server) handleUpdateSubscription(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// An update never rotates the signing secret (that happens only on an
-	// explicit regenerate), so no secret is revealed here.
-	resp := createSubscriptionResponse{Subscription: sub}
-
-	data, err := json.Marshal(resp)
+	data, err := json.Marshal(sub)
 	if err != nil {
 		log.Printf("Error encoding subscription response: %v", err)
 		http.Error(w, "Failed to encode response", http.StatusInternalServerError)

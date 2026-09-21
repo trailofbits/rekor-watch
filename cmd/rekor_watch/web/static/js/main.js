@@ -473,55 +473,37 @@ async function submitSubscription() {
     }
 }
 
-// showRevealedSecret displays a webhook signing secret once, with a copy
-// control and a warning that it will not be shown again. The secret is set as
-// textContent (never innerHTML) so it cannot inject markup.
+// showRevealedSecret displays a webhook signing secret in the static reveal UI.
 function showRevealedSecret(secret) {
     const box = document.getElementById('secret-reveal');
-    if (!box) {
+    const field = document.getElementById('secret-value');
+    if (!box || !field) {
         return;
     }
-    box.replaceChildren();
-
-    const heading = document.createElement('strong');
-    heading.textContent = 'Webhook signing secret';
-    box.appendChild(heading);
-
-    const warning = document.createElement('p');
-    warning.className = 'secret-warning';
-    warning.textContent = "Copy it now — it won't be shown again. Lost secrets can only be replaced by regenerating.";
-    box.appendChild(warning);
-
-    const field = document.createElement('input');
-    field.type = 'text';
-    field.readOnly = true;
-    field.className = 'secret-value';
     field.value = secret;
-    box.appendChild(field);
+    box.hidden = false;
+}
 
-    const copyBtn = document.createElement('button');
-    copyBtn.type = 'button';
-    copyBtn.className = 'btn btn-primary';
-    copyBtn.textContent = 'Copy';
-    copyBtn.onclick = () => {
-        field.select();
-        if (navigator.clipboard) {
-            navigator.clipboard.writeText(secret).catch(() => {});
-        }
-    };
-    box.appendChild(copyBtn);
+function copyRevealedSecret() {
+    const field = document.getElementById('secret-value');
+    if (!field) {
+        return;
+    }
+    field.select();
+    if (navigator.clipboard) {
+        navigator.clipboard.writeText(field.value).catch(() => {});
+    }
+}
 
-    const dismissBtn = document.createElement('button');
-    dismissBtn.type = 'button';
-    dismissBtn.className = 'btn btn-cancel';
-    dismissBtn.textContent = 'Dismiss';
-    dismissBtn.onclick = () => {
-        box.replaceChildren();
-        box.style.display = 'none';
-    };
-    box.appendChild(dismissBtn);
-
-    box.style.display = 'block';
+function dismissRevealedSecret() {
+    const box = document.getElementById('secret-reveal');
+    const field = document.getElementById('secret-value');
+    if (field) {
+        field.value = '';
+    }
+    if (box) {
+        box.hidden = true;
+    }
 }
 
 async function regenerateSecret(id) {
