@@ -1,11 +1,11 @@
 module github.com/sigstore/rekor-monitor
 
-go 1.25.8
+go 1.25.11
 
 require (
 	github.com/go-openapi/runtime v0.33.1
 	github.com/go-openapi/swag/conv v0.29.1
-	github.com/golang-migrate/migrate/v4 v4.19.1
+	github.com/golang-migrate/migrate/v4 v4.20.1
 	github.com/google/certificate-transparency-go v1.3.3
 	github.com/google/go-github/v90 v90.0.0
 	github.com/mailgun/mailgun-go/v4 v4.23.0
