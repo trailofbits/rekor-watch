@@ -106,14 +106,31 @@ limitations under the License.
                 The
                 <a href="https://github.com/standard-webhooks/standard-webhooks" target="_blank" rel="noopener">Standard Webhooks reference libraries</a>
                 (including Go, Python, JavaScript, and more) implement this
-                <code>v1</code> HMAC verification out of the box.
+                <code>v1</code> HMAC verification out of the box. The Go library's
+                <code>Verify</code> method also checks the required headers and
+                rejects timestamps more than five minutes in the past or future.
             </p>
-<pre><code>// Go, using crypto/hmac (no external dependency)
-key, _ := base64.StdEncoding.DecodeString(strings.TrimPrefix(secret, "whsec_"))
-mac := hmac.New(sha256.New, key)
-mac.Write([]byte(id + "." + ts + "." + string(rawBody)))
-want := "v1," + base64.StdEncoding.EncodeToString(mac.Sum(nil))
-ok := hmac.Equal([]byte(want), []byte(receivedSignature))</code></pre>
+<pre><code>// Go, using the Standard Webhooks reference library
+import (
+    "net/http"
+
+    standardwebhooks "github.com/standard-webhooks/standard-webhooks/libraries/go"
+)
+
+func verifyWebhook(secret string, rawBody []byte, headers http.Header) error {
+    wh, err := standardwebhooks.NewWebhook(secret)
+    if err != nil {
+        return err
+    }
+    return wh.Verify(rawBody, headers)
+}</code></pre>
+            <p>
+                Pass the unmodified bytes read from <code>r.Body</code> and the
+                original <code>r.Header</code>. Reject the request if reading the
+                body or calling <code>verifyWebhook</code> returns an error. Only
+                parse and process the payload after verification succeeds, and
+                deduplicate entries as described above.
+            </p>
         </section>
 
         <section class="matches-section">
