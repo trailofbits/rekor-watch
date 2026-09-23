@@ -97,7 +97,7 @@ func testSecretDeriver(t *testing.T) *notifications.WebhookSecretDeriver {
 
 // testMux returns the server's full route table for tests
 // that need path-based routing (e.g. /api/subscriptions/{id}).
-func testMux(t *testing.T, srv *Server) *http.ServeMux {
+func testMux(t *testing.T, srv *Server) http.Handler {
 	t.Helper()
 	mux, err := srv.newMux()
 	if err != nil {
@@ -665,6 +665,7 @@ func TestAPISubscriptions_Unauthenticated(t *testing.T) {
 func TestFullAuthFlow(t *testing.T) {
 	srv, s, mock := setupTestServer(t)
 	ctx := context.Background()
+	mux := testMux(t, srv)
 
 	// Step 1: POST /login with email
 	form := url.Values{"email": {"flow@example.com"}}
@@ -675,8 +676,10 @@ func TestFullAuthFlow(t *testing.T) {
 	req.Header.Set(
 		"Content-Type", "application/x-www-form-urlencoded",
 	)
+	req.Header.Set("Origin", "http://example.com")
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	w := httptest.NewRecorder()
-	srv.handleLogin(w, req)
+	mux.ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("login POST: expected 200, got %d", w.Code)
@@ -704,8 +707,10 @@ func TestFullAuthFlow(t *testing.T) {
 		fmt.Sprintf("/auth/callback?token=%s", tokenStr),
 		nil,
 	)
+	req.Header.Set("Origin", "https://mail.example.net")
+	req.Header.Set("Sec-Fetch-Site", "cross-site")
 	w = httptest.NewRecorder()
-	srv.handleAuthCallback(w, req)
+	mux.ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf(
@@ -720,8 +725,10 @@ func TestFullAuthFlow(t *testing.T) {
 		strings.NewReader(activateForm.Encode()),
 	)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Origin", "http://example.com")
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	w = httptest.NewRecorder()
-	srv.handleAuthCallback(w, req)
+	mux.ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf(
@@ -748,8 +755,10 @@ func TestFullAuthFlow(t *testing.T) {
 		Name:  "session_token",
 		Value: sessionToken,
 	})
+	req.Header.Set("Origin", "http://example.com")
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	w = httptest.NewRecorder()
-	srv.handleAuthPoll(w, req)
+	mux.ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("auth poll: expected 200, got %d", w.Code)
@@ -763,7 +772,6 @@ func TestFullAuthFlow(t *testing.T) {
 	}
 
 	// Step 6: Access dashboard with session
-	handler := srv.requireAuth(srv.handleDashboard)
 	req = httptest.NewRequest(
 		http.MethodGet, "/dashboard", nil,
 	)
@@ -771,8 +779,10 @@ func TestFullAuthFlow(t *testing.T) {
 		Name:  "session_token",
 		Value: sessionToken,
 	})
+	req.Header.Set("Origin", "http://example.com")
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	w = httptest.NewRecorder()
-	handler(w, req)
+	mux.ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Errorf(
@@ -795,8 +805,10 @@ func TestFullAuthFlow(t *testing.T) {
 		Name:  "session_token",
 		Value: sessionToken,
 	})
+	req.Header.Set("Origin", "http://example.com")
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	w = httptest.NewRecorder()
-	srv.handleLogout(w, req)
+	mux.ServeHTTP(w, req)
 
 	if w.Code != http.StatusSeeOther {
 		t.Errorf(
@@ -805,7 +817,6 @@ func TestFullAuthFlow(t *testing.T) {
 	}
 
 	// Step 7: Verify session is gone
-	handler = srv.requireAuth(srv.handleDashboard)
 	req = httptest.NewRequest(
 		http.MethodGet, "/dashboard", nil,
 	)
@@ -813,8 +824,10 @@ func TestFullAuthFlow(t *testing.T) {
 		Name:  "session_token",
 		Value: sessionToken,
 	})
+	req.Header.Set("Origin", "http://example.com")
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	w = httptest.NewRecorder()
-	handler(w, req)
+	mux.ServeHTTP(w, req)
 
 	if w.Code != http.StatusSeeOther {
 		t.Errorf(
@@ -1063,7 +1076,7 @@ func newCappedServer(t *testing.T, maxSubs int) (*Server, *sqlite.Store) {
 
 // postSubscription issues a POST /api/subscriptions with a fresh,
 // uniquely-keyed body so each call can succeed independently.
-func postSubscription(t *testing.T, mux *http.ServeMux, sessionToken, fingerprint string) *httptest.ResponseRecorder {
+func postSubscription(t *testing.T, mux http.Handler, sessionToken, fingerprint string) *httptest.ResponseRecorder {
 	t.Helper()
 	body := fmt.Sprintf(
 		`{"name":%q,"monitoredValue":{"type":"fingerprint","fingerprint":%q},"notificationType":"webhook","webhookURL":"https://hooks.example.com/x"}`,

@@ -221,8 +221,8 @@ func NewServer(cfg ServerConfig) *Server {
 	}
 }
 
-// newMux builds the HTTP route table. It is used by Start and by tests.
-func (s *Server) newMux() (*http.ServeMux, error) {
+// newMux builds the protected HTTP handler used by Start and by tests.
+func (s *Server) newMux() (http.Handler, error) {
 	mux := http.NewServeMux()
 
 	// Serve static files
@@ -255,7 +255,7 @@ func (s *Server) newMux() (*http.ServeMux, error) {
 	mux.HandleFunc("POST "+routeAPISubscriptionsByIDDisable, s.requireAuthRateLimited(s.handleDisableSubscription))
 	mux.HandleFunc("POST "+routeAPISubscriptionsByIDRegenerateSecret, s.requireAuthRateLimited(s.handleRegenerateSecret))
 
-	return mux, nil
+	return http.NewCrossOriginProtection().Handler(mux), nil
 }
 
 // Start binds the web server to the given port and serves in the

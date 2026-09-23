@@ -43,7 +43,7 @@ func webhookBody(name, fingerprint, url string) string {
 }
 
 // createWebhookSub posts a webhook subscription and returns the response.
-func createWebhookSub(t *testing.T, mux *http.ServeMux, session, name, fingerprint, url string) *httptest.ResponseRecorder {
+func createWebhookSub(t *testing.T, mux http.Handler, session, name, fingerprint, url string) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodPost, routeAPISubscriptions, strings.NewReader(webhookBody(name, fingerprint, url)))
 	req.Header.Set("Content-Type", "application/json")
@@ -155,7 +155,7 @@ func TestCreateWebhookSubscription_distinctUsersSameURLDistinctSecrets(t *testin
 }
 
 // updateWebhookSub PUTs a webhook subscription and returns the response.
-func updateWebhookSub(t *testing.T, mux *http.ServeMux, session string, id int64, name, fingerprint, url string) *httptest.ResponseRecorder {
+func updateWebhookSub(t *testing.T, mux http.Handler, session string, id int64, name, fingerprint, url string) *httptest.ResponseRecorder {
 	t.Helper()
 	target := fmt.Sprintf("/api/subscriptions/%d", id)
 	req := httptest.NewRequest(http.MethodPut, target, strings.NewReader(webhookBody(name, fingerprint, url)))
@@ -220,7 +220,7 @@ func TestUpdateSubscription_noURLChangeOmitsSecret(t *testing.T) {
 	}
 }
 
-func regenerate(t *testing.T, mux *http.ServeMux, session string, id int64) *httptest.ResponseRecorder {
+func regenerate(t *testing.T, mux http.Handler, session string, id int64) *httptest.ResponseRecorder {
 	t.Helper()
 	url := fmt.Sprintf("/api/subscriptions/%d/regenerate-secret", id)
 	req := httptest.NewRequest(http.MethodPost, url, nil)

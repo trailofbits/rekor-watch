@@ -409,6 +409,11 @@ For production deployments, at minimum set:
 - `REKOR_WATCH_LISTEN` to the external IP address if the service should be reachable externally
 - `REKOR_WATCH_TRUST_PROXY_HEADERS=true` if running behind a reverse proxy
 
+The web server rejects cross-origin browser requests that change state. Reverse
+proxies must preserve the original `Host`, `Origin`, and `Sec-Fetch-Site` headers
+so these checks work correctly. Requests from API clients without browser origin
+headers still require authentication.
+
 ## Webhook payload
 
 Each notification cycle sends at most **one POST per subscription**, carrying
