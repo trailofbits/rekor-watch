@@ -320,7 +320,7 @@ func listPendingMatches(ctx context.Context, exec dbExecutor) ([]*store.PendingM
 		       m.subscription_id, m.notified_at, m.created_at,
 		       u.id, u.email, u.created_at,
 		       s.id, s.user_id, s.name, s.webhook_url, s.notification_type,
-		       s.monitored_value,
+		       s.webhook_secret_version, s.monitored_value,
 		       s.consecutive_failures, s.last_failure_at, s.disabled_at, s.next_retry_at, s.created_at
 		FROM matches m
 		JOIN subscriptions s ON m.subscription_id = s.id
@@ -361,6 +361,7 @@ func listPendingMatches(ctx context.Context, exec dbExecutor) ([]*store.PendingM
 			&pm.Subscription.Name,
 			&pm.Subscription.WebhookURL,
 			&pm.Subscription.NotificationType,
+			&pm.Subscription.WebhookSecretVersion,
 			&monitoredValueJSON,
 			&pm.Subscription.ConsecutiveFailures,
 			&pm.Subscription.LastFailureAt,
@@ -444,9 +445,13 @@ func saveSubscription(ctx context.Context, exec dbExecutor, sub *store.Subscript
 		return fmt.Errorf("failed to verify monitored value: %w", err)
 	}
 
+	// RETURNING reflects the server-assigned id and webhook_secret_version
+	// DEFAULT back onto the struct, so a caller deriving the reveal-once secret
+	// right after create uses the version dispatch will sign with.
 	query := `
 		INSERT INTO subscriptions (user_id, name, monitored_value, webhook_url, notification_type)
 		VALUES (?, ?, ?, ?, ?)
+		RETURNING id, webhook_secret_version
 	`
 
 	monitoredValueJSON, err := sub.MonitoredValue.MarshalJSON()
@@ -454,17 +459,13 @@ func saveSubscription(ctx context.Context, exec dbExecutor, sub *store.Subscript
 		return fmt.Errorf("failed to serialize monitored value: %w", err)
 	}
 
-	result, err := exec.ExecContext(ctx, query, sub.UserID, sub.Name, monitoredValueJSON, sub.WebhookURL, sub.NotificationType)
+	err = exec.QueryRowContext(ctx, query, sub.UserID, sub.Name, monitoredValueJSON, sub.WebhookURL, sub.NotificationType).
+		Scan(&sub.ID, &sub.WebhookSecretVersion)
 	if err != nil {
 		if isUniqueConstraintErr(err) {
 			return fmt.Errorf("subscription name %q already in use by user %d: %w", sub.Name, sub.UserID, store.ErrDuplicateName)
 		}
 		return fmt.Errorf("failed to save subscription: %w", err)
-	}
-
-	sub.ID, err = result.LastInsertId()
-	if err != nil {
-		return fmt.Errorf("failed to get last insert ID: %w", err)
 	}
 
 	return nil
@@ -623,6 +624,7 @@ func scanSubscriptionRows(rows *sql.Rows) ([]*store.Subscription, error) {
 			&monitoredValueJSON,
 			&sub.WebhookURL,
 			&sub.NotificationType,
+			&sub.WebhookSecretVersion,
 			&sub.ConsecutiveFailures,
 			&sub.LastFailureAt,
 			&sub.DisabledAt,
@@ -651,6 +653,7 @@ func scanSubscriptionRows(rows *sql.Rows) ([]*store.Subscription, error) {
 func listSubscriptionsByUser(ctx context.Context, exec dbExecutor, userID int64) ([]*store.Subscription, error) {
 	query := `
 		SELECT id, user_id, name, monitored_value, webhook_url, notification_type,
+		       webhook_secret_version,
 		       consecutive_failures, last_failure_at, disabled_at, next_retry_at, created_at
 		FROM subscriptions
 		WHERE user_id = ?
@@ -679,6 +682,7 @@ func countSubscriptionsByUser(ctx context.Context, exec dbExecutor, userID int64
 func listSubscriptions(ctx context.Context, exec dbExecutor) ([]*store.Subscription, error) {
 	query := `
 		SELECT id, user_id, name, monitored_value, webhook_url, notification_type,
+		       webhook_secret_version,
 		       consecutive_failures, last_failure_at, disabled_at, next_retry_at, created_at
 		FROM subscriptions
 		ORDER BY created_at DESC
@@ -899,6 +903,34 @@ func setSubscriptionEnabled(ctx context.Context, exec dbExecutor, id, userID int
 	return nil
 }
 
+func regenerateWebhookSecret(ctx context.Context, exec dbExecutor, id, userID int64) (int, error) {
+	// CASE bumps only webhook rows; RETURNING the type lets us reject non-webhook
+	// subs (ErrNotWebhook), while a missing row yields ErrNotFound.
+	query := `
+		UPDATE subscriptions
+		SET webhook_secret_version = CASE
+			WHEN notification_type = ? THEN webhook_secret_version + 1
+			ELSE webhook_secret_version
+		END
+		WHERE id = ? AND user_id = ?
+		RETURNING notification_type, webhook_secret_version
+	`
+	var notificationType string
+	var newVersion int
+	err := exec.QueryRowContext(ctx, query, store.NotificationTypeWebhook, id, userID).
+		Scan(&notificationType, &newVersion)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, fmt.Errorf("subscription %d not found for user %d: %w", id, userID, store.ErrNotFound)
+	}
+	if err != nil {
+		return 0, fmt.Errorf("failed to regenerate webhook secret: %w", err)
+	}
+	if store.NotificationType(notificationType) != store.NotificationTypeWebhook {
+		return 0, fmt.Errorf("subscription %d for user %d is %q, not a webhook: %w", id, userID, notificationType, store.ErrNotWebhook)
+	}
+	return newVersion, nil
+}
+
 // --- Store methods (use db directly) ---
 
 // LoadCheckpoint loads the most recent checkpoint for the given origin.
@@ -997,6 +1029,12 @@ func (s *Store) RecordNotificationFailure(ctx context.Context, subscriptionID in
 // SetSubscriptionEnabled enables or disables a subscription.
 func (s *Store) SetSubscriptionEnabled(ctx context.Context, id, userID int64, enabled bool) error {
 	return setSubscriptionEnabled(ctx, s.db, id, userID, enabled)
+}
+
+// RegenerateWebhookSecret bumps the webhook signing-secret version, scoped to
+// the owning user, and returns the new version.
+func (s *Store) RegenerateWebhookSecret(ctx context.Context, id, userID int64) (int, error) {
+	return regenerateWebhookSecret(ctx, s.db, id, userID)
 }
 
 // GetUserByID returns the user with the given ID, or nil if not found.
@@ -1152,6 +1190,11 @@ func (t *Tx) RecordNotificationFailure(ctx context.Context, subscriptionID int64
 // SetSubscriptionEnabled enables or disables a subscription within the transaction.
 func (t *Tx) SetSubscriptionEnabled(ctx context.Context, id, userID int64, enabled bool) error {
 	return setSubscriptionEnabled(ctx, t.tx, id, userID, enabled)
+}
+
+// RegenerateWebhookSecret bumps the webhook signing-secret version within the transaction.
+func (t *Tx) RegenerateWebhookSecret(ctx context.Context, id, userID int64) (int, error) {
+	return regenerateWebhookSecret(ctx, t.tx, id, userID)
 }
 
 // GetUserByID returns the user with the given ID within the transaction.

@@ -362,12 +362,22 @@ as a local email server.
 
 ### Quick start
 
+The webhook signing-secret master key is required, so generate it next to the
+compose file before the first start (see [Signing secret](#signing-secret) for
+details):
+
 ```bash
+(umask 077 && set -C && openssl rand -base64 32 > webhook_secret.key)
+sudo chgrp 65532 webhook_secret.key
+chmod 640 webhook_secret.key
 docker compose --profile watch up --build
 ```
 
-This starts the web UI at <http://localhost:8080> and the mailpit inbox at
-<http://localhost:8025>.
+Compose bind-mounts `./webhook_secret.key` read-only into the container. The
+commands above grant read access to its non-root group (GID `65532`), not other
+host users. With rootless Docker or user-namespace remapping, use the host GID
+mapped to the container's GID `65532` instead. This starts the web UI at
+<http://localhost:8080> and the mailpit inbox at <http://localhost:8025>.
 
 ### Configuration
 
@@ -385,6 +395,7 @@ Key configuration groups:
 | Core | `REKOR_WATCH_INTERVAL`, `REKOR_WATCH_BASE_URL`, `REKOR_WATCH_MONITOR_CONFIG` | Polling frequency, public URL, monitor config |
 | SMTP | `REKOR_WATCH_SMTP_HOST`, `_PORT`, `_FROM`, `_USERNAME`, `_PASSWORD`, `_USE_TLS` | Point to a real SMTP server for production |
 | Security | `REKOR_WATCH_ALLOW_PRIVATE_WEBHOOKS`, `REKOR_WATCH_TRUST_PROXY_HEADERS` | Disable private webhooks and enable proxy headers in production |
+| Webhooks | `REKOR_WATCH_WEBHOOK_SECRET_KEY_FILE` | **Required.** Under Compose this is the *host* path to the master-key file, which is bind-mounted read-only into the container (default `./webhook_secret.key`) — see [Signing secret](#signing-secret) |
 | Ports | `REKOR_WATCH_LISTEN`, `REKOR_WATCH_HOST_PORT`, `MAILPIT_LISTEN` | Bind address and port mapping |
 
 See `.env.example` for the full list of options with descriptions.
@@ -397,6 +408,11 @@ For production deployments, at minimum set:
 - `REKOR_WATCH_SMTP_*` variables to a real mail server with TLS
 - `REKOR_WATCH_LISTEN` to the external IP address if the service should be reachable externally
 - `REKOR_WATCH_TRUST_PROXY_HEADERS=true` if running behind a reverse proxy
+
+The web server rejects cross-origin browser requests that change state. Reverse
+proxies must preserve the original `Host`, `Origin`, and `Sec-Fetch-Site` headers
+so these checks work correctly. Requests from API clients without browser origin
+headers still require authentication.
 
 ## Webhook payload
 
@@ -435,6 +451,45 @@ today) and read `timestamp` (RFC3339, UTC) as the delivery time. Under `data`,
 `subscription_name` is the subscription's human-readable name, `monitored_value`
 mirrors the subscription's matcher, and `entries` is a list with up to 100
 elements. Order within `entries` is unspecified.
+
+### Signing secret
+
+Each webhook subscription has its own signing secret — the
+[Standard Webhooks](https://www.standardwebhooks.com/) `whsec_…` value. Secrets
+are derived on demand from a single master key and never stored, so the
+dashboard reveals a subscription's secret **once**: when the webhook is created
+and when you click *Regenerate secret*. Copy it then. Editing a subscription
+(including changing its URL) does not rotate the secret — use *Regenerate
+secret* for that.
+
+The master key is mandatory — the watcher refuses to start without it. Point
+`REKOR_WATCH_WEBHOOK_SECRET_KEY_FILE` at a file holding the standard base64
+encoding of **at least 32 random bytes**:
+
+```bash
+(umask 077 && set -C && openssl rand -base64 32 > webhook_secret.key)
+export REKOR_WATCH_WEBHOOK_SECRET_KEY_FILE="$PWD/webhook_secret.key"
+```
+
+This creates the key with owner-only access (`0600`) and refuses to overwrite
+an existing file. When running the binary directly, the service account must
+be able to read it. Do not make the key world-readable.
+
+Under Docker Compose you don't set this env var to a container path: point
+`REKOR_WATCH_WEBHOOK_SECRET_KEY_FILE` at the key file's *host* path (or leave it
+unset to use `./webhook_secret.key` next to the compose file). Compose
+bind-mounts that file read-only into the container. Grant its non-root group
+read access with `sudo chgrp 65532 webhook_secret.key` and
+`chmod 640 webhook_secret.key`, as in the [quick start](#quick-start).
+
+For an existing installation, correct the key's permissions without generating
+a replacement. If an untrusted user may already have read it, treat the master
+key as compromised: replacing it and updating every receiver is necessary;
+regenerating individual subscription secrets does not protect a leaked master key.
+
+Keep the file private and back it up: every subscription's secret is derived
+from it, so replacing the key invalidates all existing webhook secrets and each
+consumer must copy its new secret.
 
 ### Deduplication contract
 

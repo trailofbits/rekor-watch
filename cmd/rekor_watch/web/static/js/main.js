@@ -458,10 +458,71 @@ async function submitSubscription() {
             const text = await response.text();
             throw new Error(text || `HTTP ${response.status}`);
         }
+        // Creating a webhook subscription returns its signing secret exactly
+        // once. Editing a subscription never rotates the secret, so the field
+        // is absent there (use the regenerate action to rotate).
+        const result = await response.json().catch(() => ({}));
+        if (result && result.secret) {
+            showRevealedSecret(result.secret);
+        }
         document.getElementById('add-subscription-form').style.display = 'none';
         loadSubscriptions();
     } catch (error) {
         errorEl.textContent = error.message;
+        errorEl.style.display = 'block';
+    }
+}
+
+// showRevealedSecret displays a webhook signing secret in the static reveal UI.
+function showRevealedSecret(secret) {
+    const box = document.getElementById('secret-reveal');
+    const field = document.getElementById('secret-value');
+    if (!box || !field) {
+        return;
+    }
+    field.value = secret;
+    box.hidden = false;
+}
+
+function copyRevealedSecret() {
+    const field = document.getElementById('secret-value');
+    if (!field) {
+        return;
+    }
+    field.select();
+    if (navigator.clipboard) {
+        navigator.clipboard.writeText(field.value).catch(() => {});
+    }
+}
+
+function dismissRevealedSecret() {
+    const box = document.getElementById('secret-reveal');
+    const field = document.getElementById('secret-value');
+    if (field) {
+        field.value = '';
+    }
+    if (box) {
+        box.hidden = true;
+    }
+}
+
+async function regenerateSecret(id) {
+    if (!confirm('Regenerate the signing secret? The current secret stops working immediately and the receiver must be updated with the new one.')) {
+        return;
+    }
+    try {
+        const response = await fetch(`/api/subscriptions/${id}/regenerate-secret`, {method: 'POST'});
+        if (!response.ok) {
+            const text = await response.text();
+            throw new Error(text || `HTTP ${response.status}`);
+        }
+        const data = await response.json();
+        if (data && data.secret) {
+            showRevealedSecret(data.secret);
+        }
+    } catch (error) {
+        const errorEl = document.getElementById('sub-error');
+        errorEl.textContent = `Failed to regenerate secret: ${error.message}`;
         errorEl.style.display = 'block';
     }
 }
@@ -601,6 +662,14 @@ function renderSubscriptions(container, subs) {
             disableBtn.textContent = 'Disable';
             disableBtn.onclick = () => disableSubscription(sub.ID);
             actions.appendChild(disableBtn);
+        }
+
+        if (notifyType === 'webhook') {
+            const regenBtn = document.createElement('button');
+            regenBtn.className = 'btn btn-regenerate';
+            regenBtn.textContent = 'Regenerate secret';
+            regenBtn.onclick = () => regenerateSecret(sub.ID);
+            actions.appendChild(regenBtn);
         }
 
         const editBtn = document.createElement('button');
