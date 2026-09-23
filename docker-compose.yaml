@@ -60,6 +60,8 @@ services:
       # path comes from REKOR_WATCH_WEBHOOK_SECRET_KEY_FILE in .env (or the
       # shell); it defaults to ./webhook_secret.key next to this compose file.
       # Generate it before the first `up` (see README → Signing secret).
+      # Restrict host permissions to 0640 with the container's group (65532,
+      # or its mapped host GID); do not make the key world-readable.
       # create_host_path:false makes a missing key file fail fast at `up` with a
       # clear "bind source path does not exist" error, instead of Docker
       # silently creating a directory there that the app then rejects with

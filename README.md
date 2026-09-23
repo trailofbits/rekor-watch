@@ -367,13 +367,16 @@ compose file before the first start (see [Signing secret](#signing-secret) for
 details):
 
 ```bash
-openssl rand -base64 32 > webhook_secret.key
-chmod 644 webhook_secret.key
+(umask 077 && set -C && openssl rand -base64 32 > webhook_secret.key)
+sudo chgrp 65532 webhook_secret.key
+chmod 640 webhook_secret.key
 docker compose --profile watch up --build
 ```
 
-Compose bind-mounts `./webhook_secret.key` read-only into the container, so the
-file must exist (with `chmod 644`) before `up`. This starts the web UI at
+Compose bind-mounts `./webhook_secret.key` read-only into the container. The
+commands above grant read access to its non-root group (GID `65532`), not other
+host users. With rootless Docker or user-namespace remapping, use the host GID
+mapped to the container's GID `65532` instead. This starts the web UI at
 <http://localhost:8080> and the mailpit inbox at <http://localhost:8025>.
 
 ### Configuration
@@ -459,15 +462,25 @@ The master key is mandatory — the watcher refuses to start without it. Point
 encoding of **at least 32 random bytes**:
 
 ```bash
-openssl rand -base64 32 > webhook_secret.key
-chmod 644 webhook_secret.key
+(umask 077 && set -C && openssl rand -base64 32 > webhook_secret.key)
 export REKOR_WATCH_WEBHOOK_SECRET_KEY_FILE="$PWD/webhook_secret.key"
 ```
+
+This creates the key with owner-only access (`0600`) and refuses to overwrite
+an existing file. When running the binary directly, the service account must
+be able to read it. Do not make the key world-readable.
 
 Under Docker Compose you don't set this env var to a container path: point
 `REKOR_WATCH_WEBHOOK_SECRET_KEY_FILE` at the key file's *host* path (or leave it
 unset to use `./webhook_secret.key` next to the compose file). Compose
-bind-mounts that file read-only into the container.
+bind-mounts that file read-only into the container. Grant its non-root group
+read access with `sudo chgrp 65532 webhook_secret.key` and
+`chmod 640 webhook_secret.key`, as in the [quick start](#quick-start).
+
+For an existing installation, correct the key's permissions without generating
+a replacement. If an untrusted user may already have read it, treat the master
+key as compromised: replacing it and updating every receiver is necessary;
+regenerating individual subscription secrets does not protect a leaked master key.
 
 Keep the file private and back it up: every subscription's secret is derived
 from it, so replacing the key invalidates all existing webhook secrets and each
