@@ -93,7 +93,7 @@ jobs:
           go-version-file: './go.mod'
           check-latest: true
       - name: Download artifact
-        uses: dawidd6/action-download-artifact@57aa996fc1713cc1579039614f4645a7f4841fd4 # v23
+        uses: dawidd6/action-download-artifact@eab87c9830c39eff17e5a6eadb20bfb4bc880477 # v27
         with:
           name: ${{ inputs.uploaded_log_name }}
         # Skip on first run since there will be no checkpoint
